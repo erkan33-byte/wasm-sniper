@@ -245,9 +245,9 @@
         // WERKER CODE MET LOKALE JAVASCRIPT (GEEN WASM, GEEN CDN)
         // ================================================================
         const workerCode = `
-            // Laad bibliotheken van de lokale map op GitHub
-            importScripts('/wasm-sniper/js/elliptic.min.js');
-            importScripts('/wasm-sniper/js/crypto-js.min.js');
+            // Laad bibliotheken van de lokale map op GitHub (PAD GECORRIGEerd)
+            importScripts('/js/elliptic.min.js');
+            importScripts('/js/crypto-js.min.js');
 
             const ec = new elliptic.ec("secp256k1");
 
