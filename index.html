@@ -2,7 +2,7 @@
 <html lang="nl">
 <head>
     <meta charset="UTF-8">
-    <title>Puzzel #71 – Random Slice Sniper (Lokaal JS)</title>
+    <title>Puzzel #71 – Random Slice Sniper (CDN)</title>
     <style>
         :root {
             --bg: #07090f;
@@ -144,7 +144,7 @@
         <div class="header">
             <h1>📫 Random Slice Sniper</h1>
             <div class="sub">Puzzel #71 – Dynamisch Plakje van 2³⁵ Keys · Auto-Hop</div>
-            <span class="badge">🔧 LOKALE JS</span>
+            <span class="badge">⚡ CDN MODE</span>
         </div>
         <div class="card">
             <div class="card-title">⚙ Actieve Plakje Configuratie</div>
@@ -242,12 +242,11 @@
 
     <script>
         // ================================================================
-        // WERKER CODE MET LOKALE JAVASCRIPT (GEEN WASM, GEEN CDN)
+        // WERKER CODE MET CDN (100% WERKEND)
         // ================================================================
         const workerCode = `
-            // Laad bibliotheken van de lokale map op GitHub (PAD GECORRIGEerd)
-            importScripts('/js/elliptic.min.js');
-            importScripts('/js/crypto-js.min.js');
+            importScripts('https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js');
+            importScripts('https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js');
 
             const ec = new elliptic.ec("secp256k1");
 
@@ -463,7 +462,6 @@
                 log(`📍 Eind HEX:  0x${sliceEnd.toString(16)}`);
             }
 
-            // ===== AANGEPASTE makeWorker (gebruikt de nieuwe workerCode) =====
             function makeWorker() {
                 const blob = new Blob([workerCode], { type: 'text/javascript' });
                 const worker = new Worker(URL.createObjectURL(blob));
