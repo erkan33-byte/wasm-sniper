@@ -246,7 +246,6 @@
         };
 
         try {
-            // Geladen via snelle, betrouwbare CDNs direct in de worker thread
             importScripts(
                 'https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js',
                 'https://cdnjs.cloudflare.com/ajax/libs/hash.js/1.1.7/hash.min.js'
@@ -311,7 +310,6 @@
                 const method = data.method || 'random';
                 const workerId = data.workerId;
                 
-                // Omzetting van checksum string naar 4 rauwe byte integers voor directe numerieke matches
                 const targetChecksumBytes = [
                     parseInt(data.targetChecksumHex.slice(0, 2), 16),
                     parseInt(data.targetChecksumHex.slice(2, 4), 16),
@@ -321,16 +319,16 @@
 
                 self.postMessage({ type: "WORKER_STARTED", workerId: workerId });
 
-                // Vaste bytebuffer voorkomt geheugendeallocaties (Garbage Collection remming)
                 const payloadBuf = new Uint8Array(21);
                 payloadBuf[0] = 0;
 
                 if (method === 'linear') {
                     const G = ec.curve.g;
                     let currentKey = startKey;
-                    let currentPoint = G.mul(currentKey.toString(16));
                     
-                    // Grote batches verminderen de postMessage overhead aanzienlijk
+                    // BUGFIX: Gebruik keyFromPrivate in plaats van G.mul() om een string parser error te vermijden
+                    let currentPoint = ec.keyFromPrivate(currentKey.toString(16).padStart(64, '0')).getPublic();
+                    
                     const LINEAR_BATCH_SIZE = 8000; 
 
                     function step() {
@@ -342,10 +340,9 @@
                                 return;
                             }
                             
-                            // Direct bytes opvragen, sneller dan hex-strings parsen
-                            const pubBytes = currentPoint.encode('array', true);
+                            // BUGFIX: Gebruik encode(null, true) voor zuivere byte array output
+                            const pubBytes = currentPoint.encode(null, true);
                             
-                            // Hash-operaties verwerken via snelle byte arrays
                             const shaOut = hash.sha256().update(pubBytes).digest();
                             const h160 = hash.ripemd160().update(shaOut).digest();
                             
@@ -356,7 +353,6 @@
                             const checkSha1 = hash.sha256().update(payloadBuf).digest();
                             const checkSha2 = hash.sha256().update(checkSha1).digest();
                             
-                            // Numerieke checksum controle in nanoseconden
                             if (checkSha2[0] === targetChecksumBytes[0] &&
                                 checkSha2[1] === targetChecksumBytes[1] &&
                                 checkSha2[2] === targetChecksumBytes[2] &&
@@ -402,7 +398,8 @@
                             const privHex = candidate.toString(16).padStart(64, '0');
                             
                             const key = ec.keyFromPrivate(privHex);
-                            const pubBytes = key.getPublic().encode('array', true);
+                            // BUGFIX: encode(null, true) voor betrouwbare ruwe array weergave
+                            const pubBytes = key.getPublic().encode(null, true);
                             
                             const shaOut = hash.sha256().update(pubBytes).digest();
                             const h160 = hash.ripemd160().update(shaOut).digest();
@@ -505,8 +502,8 @@
                 document.getElementById('rangeEnd').value = sliceEnd.toString(16);
 
                 log(`🎯 Nieuw uniek plakje afgesneden (2³⁵ keys).`);
-                log(`📍 Start HEX: 0x${sliceStart.toString(16)}`);
-                log(`📍 Eind HEX:  0x${sliceEnd.toString(16)}`);
+                log(`📍 Start HEX: 0x${sliceStart.toString(16).padStart(64, '0')}`);
+                log(`📍 Eind HEX:  0x${sliceEnd.toString(16).padStart(64, '0')}`);
             }
 
             function makeWorker() {
