@@ -2,7 +2,7 @@
 <html lang="nl">
 <head>
     <meta charset="UTF-8">
-    <title>Puzzel #71 – WASM Sniper (Lokaal / GitHub)</title>
+    <title>Puzzel #71 – Random Slice Sniper (Lokaal JS)</title>
     <style>
         :root {
             --bg: #07090f;
@@ -142,9 +142,9 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>📫 WASM Slice Sniper</h1>
+            <h1>📫 Random Slice Sniper</h1>
             <div class="sub">Puzzel #71 – Dynamisch Plakje van 2³⁵ Keys · Auto-Hop</div>
-            <span class="badge">🔧 WASM LOKAAL</span>
+            <span class="badge">🔧 LOKALE JS</span>
         </div>
         <div class="card">
             <div class="card-title">⚙ Actieve Plakje Configuratie</div>
@@ -237,38 +237,79 @@
                 <tbody id="matchTable"><tr class="empty-row"><td colspan="3">Nog geen match gevonden...</td></tr></tbody>
             </table>
         </div>
-        <div class="footer">Random Slice Sniper · WASM · Point Addition</div>
+        <div class="footer">Random Slice Sniper · Auto-Hop · Point Addition</div>
     </div>
 
     <script>
         // ================================================================
-        // VERVANG DE WORKER CODE (GEEN CDN, WEL WASM VIA GITHUB PAGES)
+        // WERKER CODE MET LOKALE JAVASCRIPT (GEEN WASM, GEEN CDN)
         // ================================================================
         const workerCode = `
-            // === WORKER MET WASM ONDERSTEUNING ===
-            async function loadWasm(url) {
-                const response = await fetch(url);
-                const buffer = await response.arrayBuffer();
-                return await WebAssembly.instantiate(buffer);
+            // Laad bibliotheken van de lokale map op GitHub
+            importScripts('/wasm-sniper/js/elliptic.min.js');
+            importScripts('/wasm-sniper/js/crypto-js.min.js');
+
+            const ec = new elliptic.ec("secp256k1");
+
+            function sha256(hex) { 
+                return CryptoJS.SHA256(CryptoJS.enc.Hex.parse(hex)).toString(); 
+            }
+            function doubleSha256(hex) { 
+                return sha256(sha256(hex)); 
             }
 
-            self.onmessage = async function(e) {
-                const data = e.data;
-
-                // Bepaal base URL (afhankelijk van GitHub Pages of lokaal)
-                const baseUrl = self.location.origin + '/wasm-sniper/wasm/';
-
-                // Laad WASM modules
-                let secp, crypto, base58;
-                try {
-                    secp = await loadWasm(baseUrl + 'secp256k1.wasm');
-                    crypto = await loadWasm(baseUrl + 'crypto.wasm');
-                    base58 = await loadWasm(baseUrl + 'base58.wasm');
-                } catch (err) {
-                    self.postMessage({ type: 'WORKER_ERROR', message: 'WASM laden mislukt: ' + err.message });
-                    return;
+            function toBase58(hex) {
+                const ALPHA = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+                const bytes = hex.match(/.{2}/g).map(b => parseInt(b, 16));
+                const digits = [0];
+                for (let i = 0; i < bytes.length; i++) {
+                    let carry = bytes[i];
+                    for (let j = 0; j < digits.length; j++) {
+                        carry += digits[j] << 8;
+                        digits[j] = carry % 58;
+                        carry = (carry / 58) | 0;
+                    }
+                    while (carry > 0) {
+                        digits.push(carry % 58);
+                        carry = (carry / 58) | 0;
+                    }
                 }
+                let s = '';
+                for (let i = 0; i < bytes.length && bytes[i] === 0; i++) s += ALPHA[0];
+                for (let i = digits.length - 1; i >= 0; i--) s += ALPHA[digits[i]];
+                return s;
+            }
 
+            function hash160(pubHex) {
+                const sha = sha256(pubHex);
+                return CryptoJS.RIPEMD160(CryptoJS.enc.Hex.parse(sha)).toString();
+            }
+
+            function getRandomBytes(size) {
+                if (self.crypto && self.crypto.getRandomValues) {
+                    const arr = new Uint8Array(size);
+                    self.crypto.getRandomValues(arr);
+                    return arr;
+                } else {
+                    const arr = new Uint8Array(size);
+                    for (let i = 0; i < size; i++) arr[i] = Math.floor(Math.random() * 256);
+                    return arr;
+                }
+            }
+
+            function randBigIntInRange(lo, hi) {
+                const range = hi - lo + 1n;
+                if (range <= 0n) return lo;
+                const bits = range.toString(2).length;
+                const bytes = Math.ceil(bits / 8);
+                const arr = getRandomBytes(bytes);
+                const hex = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+                const rand = BigInt("0x" + hex);
+                return lo + (rand % range);
+            }
+
+            self.onmessage = function(e) {
+                const data = e.data;
                 if (data.type === "ADDRESS_SCAN") {
                     const startKey = BigInt("0x" + data.startHex);
                     const endKey = BigInt("0x" + data.endHex);
@@ -276,39 +317,43 @@
                     const targetAddr = data.targetAddress;
                     const method = data.method || 'random';
                     const workerId = data.workerId;
-
-                    self.postMessage({ type: "WORKER_STARTED", workerId });
+                    
+                    self.postMessage({ type: "WORKER_STARTED", workerId: workerId });
 
                     if (method === 'linear') {
-                        // === WASM POINT ADDITION (Lineair) ===
-                        const BATCH_SIZE = 5000;
+                        const G = ec.curve.g;
                         let currentKey = startKey;
+                        let currentPoint = G.mul(currentKey.toString(16));
+                        
+                        const LINEAR_BATCH_SIZE = 1000; 
 
                         function step() {
                             let batchCount = 0;
-                            for (let i = 0; i < BATCH_SIZE; i++) {
+                            for(let i = 0; i < LINEAR_BATCH_SIZE; i++) {
                                 if (currentKey > endKey) {
                                     if (batchCount > 0) self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
                                     self.postMessage({ type: "SCAN_DONE", workerId });
                                     return;
                                 }
-
-                                // WASM calls (placeholders - later echte implementatie)
-                                const pubHex = secp.instance.exports.getPublicKey(currentKey.toString(16));
-                                const h160 = crypto.instance.exports.hash160(pubHex);
-                                const checksum = crypto.instance.exports.doubleSha256('00' + h160).slice(0, 8);
-
+                                
+                                const pubHex = currentPoint.encode('hex', true);
+                                const h160 = hash160(pubHex);
+                                const payload = '00' + h160;
+                                const checksum = doubleSha256(payload).slice(0, 8);
+                                
                                 if (checksum === targetChecksum) {
-                                    const fullAddr = base58.instance.exports.encode('00' + h160 + checksum);
+                                    const fullAddr = toBase58(payload + checksum);
                                     if (fullAddr === targetAddr) {
                                         const privHex = currentKey.toString(16).padStart(64, '0');
-                                        const wif = base58.instance.exports.encodeWIF(privHex);
-                                        self.postMessage({ type: "FOUND", privHex, wif, address: fullAddr });
+                                        const wifPayload = "80" + privHex + "01";
+                                        const doubleSha = doubleSha256(wifPayload);
+                                        const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
+                                        self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: fullAddr });
                                         return;
                                     }
                                 }
-
-                                // Point addition (WASM)
+                                
+                                currentPoint = currentPoint.add(G);
                                 currentKey++;
                                 batchCount++;
                             }
@@ -317,27 +362,36 @@
                         }
                         step();
                     } else {
-                        // === WASM RANDOM SCAN ===
-                        const RANDOM_BATCH = 500;
-
-                        function randomLoop() {
-                            for (let i = 0; i < RANDOM_BATCH; i++) {
-                                const candidate = secp.instance.exports.randomInRange(startKey.toString(16), endKey.toString(16));
-                                const pubHex = secp.instance.exports.getPublicKey(candidate);
-                                const h160 = crypto.instance.exports.hash160(pubHex);
-                                const checksum = crypto.instance.exports.doubleSha256('00' + h160).slice(0, 8);
-
+                        const RANDOM_BATCH_SIZE = 250;
+                        
+                        function checkKeyRandom(privKey) {
+                            try {
+                                const privHex = privKey.toString(16).padStart(64, '0');
+                                const key = ec.keyFromPrivate(privHex);
+                                const pubHex = key.getPublic().encode('hex', true);
+                                const h160 = hash160(pubHex);
+                                const payload = '00' + h160;
+                                const checksum = doubleSha256(payload).slice(0, 8);
                                 if (checksum === targetChecksum) {
-                                    const fullAddr = base58.instance.exports.encode('00' + h160 + checksum);
+                                    const fullAddr = toBase58(payload + checksum);
                                     if (fullAddr === targetAddr) {
-                                        const privHex = candidate.toString(16).padStart(64, '0');
-                                        const wif = base58.instance.exports.encodeWIF(privHex);
-                                        self.postMessage({ type: "FOUND", privHex, wif, address: fullAddr });
-                                        return;
+                                        const wifPayload = "80" + privHex + "01";
+                                        const doubleSha = doubleSha256(wifPayload);
+                                        const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
+                                        self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: fullAddr });
+                                        return true;
                                     }
                                 }
+                            } catch (err) {}
+                            return false;
+                        }
+
+                        function randomLoop() {
+                            for(let i = 0; i < RANDOM_BATCH_SIZE; i++) {
+                                const candidate = randBigIntInRange(startKey, endKey);
+                                if (checkKeyRandom(candidate)) return;
                             }
-                            self.postMessage({ type: "PROGRESS", count: RANDOM_BATCH, workerId });
+                            self.postMessage({ type: "PROGRESS", count: RANDOM_BATCH_SIZE, workerId });
                             setTimeout(randomLoop, 0);
                         }
                         randomLoop();
@@ -347,7 +401,7 @@
         `;
 
         // ================================================================
-        // REST VAN DE JS (ONGEWIJZIGD, BEHALVE makeWorker)
+        // REST VAN DE JS (Gebruikt de nieuwe workerCode)
         // ================================================================
         (function() {
             let workers = [], totalJumps = 0, cumulativeScanned = 0;
@@ -409,7 +463,7 @@
                 log(`📍 Eind HEX:  0x${sliceEnd.toString(16)}`);
             }
 
-            // ===== AANGEPASTE makeWorker (gebruikt workerCode hierboven) =====
+            // ===== AANGEPASTE makeWorker (gebruikt de nieuwe workerCode) =====
             function makeWorker() {
                 const blob = new Blob([workerCode], { type: 'text/javascript' });
                 const worker = new Worker(URL.createObjectURL(blob));
@@ -624,11 +678,11 @@
                 slicesVisited = 1;
                 startTime = Date.now();
                 setRunning(true);
-                setStatus('WASM Sniper Actief', 'running');
-                log(`🔍 Auto-Hop geactiveerd (WASM lokaal) met doel ${targetLimit.toLocaleString()} keys per plakje.`, 'ev-epoch');
+                setStatus('Sniper Actief', 'running');
+                log(`🔍 Auto-Hop geactiveerd met doel ${targetLimit.toLocaleString()} keys per plakje.`, 'ev-epoch');
                 
                 if (document.getElementById('scanMethod').value === 'linear') {
-                    log(`⚡ WASM Point Addition is ACTIEF!`, 'ev-found');
+                    log(`⚡ Wiskundige Snelweg (Point Addition) is ACTIEF!`, 'ev-found');
                 }
 
                 spawnWorkers();
@@ -639,7 +693,7 @@
                 setRunning(false);
                 killWorkers();
                 setStatus('Gestopt');
-                log(`🛑 WASM Sniper handmatig gepauzeerd.`, 'ev-stop');
+                log(`🛑 Auto-Hop Sniper handmatig gepauzeerd.`, 'ev-stop');
             };
 
             generateRandomSlice();
