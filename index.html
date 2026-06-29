@@ -76,7 +76,7 @@
         .divider { border: none; border-top: 1px dashed var(--dim); margin: 14px 0; }
         .btn-row { display: flex; gap: 10px; margin-top: 4px; }
         .btn {
-            flex: 1; padding: 11px 166px; padding: 11px 16px; font-family: inherit; font-size: .8rem; font-weight: bold;
+            flex: 1; padding: 11px 16px; font-family: inherit; font-size: .8rem; font-weight: bold;
             letter-spacing: .1em; cursor: pointer; border: none; border-radius: 4px; transition: opacity .15s, transform .1s;
         }
         .btn:active:not(:disabled) { transform: scale(.97); }
@@ -246,7 +246,7 @@
         };
 
         try {
-            // We gebruiken nu hash.js in plaats van crypto-js omdat deze direct met rauwe bytes rekent.
+            // Geladen via snelle, betrouwbare CDNs direct in de worker thread
             importScripts(
                 'https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js',
                 'https://cdnjs.cloudflare.com/ajax/libs/hash.js/1.1.7/hash.min.js'
@@ -311,7 +311,7 @@
                 const method = data.method || 'random';
                 const workerId = data.workerId;
                 
-                // Converteer de checksum hex string vooraf naar een array van 4 bytes (getallen)
+                // Omzetting van checksum string naar 4 rauwe byte integers voor directe numerieke matches
                 const targetChecksumBytes = [
                     parseInt(data.targetChecksumHex.slice(0, 2), 16),
                     parseInt(data.targetChecksumHex.slice(2, 4), 16),
@@ -321,16 +321,16 @@
 
                 self.postMessage({ type: "WORKER_STARTED", workerId: workerId });
 
-                // Pre-allocate een vaste buffer array om Garbage Collection overhead te elimineren
+                // Vaste bytebuffer voorkomt geheugendeallocaties (Garbage Collection remming)
                 const payloadBuf = new Uint8Array(21);
-                payloadBuf[0] = 0; // Bitcoin P2PKH voorvoegsel (0x00)
+                payloadBuf[0] = 0;
 
                 if (method === 'linear') {
                     const G = ec.curve.g;
                     let currentKey = startKey;
                     let currentPoint = G.mul(currentKey.toString(16));
                     
-                    // Fors verhoogde batchgrootte omdat de interne loop nu veel lichter draait
+                    // Grote batches verminderen de postMessage overhead aanzienlijk
                     const LINEAR_BATCH_SIZE = 8000; 
 
                     function step() {
@@ -342,23 +342,21 @@
                                 return;
                             }
                             
-                            // Vraag de public key op als pure byte array in plaats van een Hex string
+                            // Direct bytes opvragen, sneller dan hex-strings parsen
                             const pubBytes = currentPoint.encode('array', true);
                             
-                            // Hash160 via hash.js direct met getallen arrays
-                            const shaOut = self.hash.sha256().update(pubBytes).digest();
-                            const h160 = self.hash.ripemd160().update(shaOut).digest();
+                            // Hash-operaties verwerken via snelle byte arrays
+                            const shaOut = hash.sha256().update(pubBytes).digest();
+                            const h160 = hash.ripemd160().update(shaOut).digest();
                             
-                            // Schrijf de bytes direct in de herbruikbare buffer
                             for (let j = 0; j < 20; j++) {
                                 payloadBuf[j + 1] = h160[j];
                             }
                             
-                            // Dubbele SHA256 voor de checksum controle
-                            const checkSha1 = self.hash.sha256().update(payloadBuf).digest();
-                            const checkSha2 = self.hash.sha256().update(checkSha1).digest();
+                            const checkSha1 = hash.sha256().update(payloadBuf).digest();
+                            const checkSha2 = hash.sha256().update(checkSha1).digest();
                             
-                            // Razendsnelle byte-tot-byte vergelijking (Geen string manipulatie nodig in de hot loop!)
+                            // Numerieke checksum controle in nanoseconden
                             if (checkSha2[0] === targetChecksumBytes[0] &&
                                 checkSha2[1] === targetChecksumBytes[1] &&
                                 checkSha2[2] === targetChecksumBytes[2] &&
@@ -373,8 +371,8 @@
                                     
                                     function localDoubleSha256(hex) {
                                         const bytes = hex.match(/.{2}/g).map(b => parseInt(b, 16));
-                                        const s1 = self.hash.sha256().update(bytes).digest();
-                                        const s2 = self.hash.sha256().update(s1).digest();
+                                        const s1 = hash.sha256().update(bytes).digest();
+                                        const s2 = hash.sha256().update(s1).digest();
                                         return s2.map(b => b.toString(16).padStart(2, '0')).join('');
                                     }
                                     
@@ -406,15 +404,15 @@
                             const key = ec.keyFromPrivate(privHex);
                             const pubBytes = key.getPublic().encode('array', true);
                             
-                            const shaOut = self.hash.sha256().update(pubBytes).digest();
-                            const h160 = self.hash.ripemd160().update(shaOut).digest();
+                            const shaOut = hash.sha256().update(pubBytes).digest();
+                            const h160 = hash.ripemd160().update(shaOut).digest();
                             
                             for (let j = 0; j < 20; j++) {
                                 payloadBuf[j + 1] = h160[j];
                             }
                             
-                            const checkSha1 = self.hash.sha256().update(payloadBuf).digest();
-                            const checkSha2 = self.hash.sha256().update(checkSha1).digest();
+                            const checkSha1 = hash.sha256().update(payloadBuf).digest();
+                            const checkSha2 = hash.sha256().update(checkSha1).digest();
                             
                             if (checkSha2[0] === targetChecksumBytes[0] &&
                                 checkSha2[1] === targetChecksumBytes[1] &&
@@ -428,8 +426,8 @@
                                 if (fullAddr === targetAddr) {
                                     function localDoubleSha256(hex) {
                                         const bytes = hex.match(/.{2}/g).map(b => parseInt(b, 16));
-                                        const s1 = self.hash.sha256().update(bytes).digest();
-                                        const s2 = self.hash.sha256().update(s1).digest();
+                                        const s1 = hash.sha256().update(bytes).digest();
+                                        const s2 = hash.sha256().update(s1).digest();
                                         return s2.map(b => b.toString(16).padStart(2, '0')).join('');
                                     }
                                     const wifPayload = "80" + privHex + "01";
