@@ -2,7 +2,7 @@
 <html lang="nl">
 <head>
     <meta charset="UTF-8">
-    <title>Puzzel #71 – Random Slice Sniper (CDN)</title>
+    <title>Puzzel #71 – Random Slice Sniper (Auto-Hop)</title>
     <style>
         :root {
             --bg: #07090f;
@@ -76,7 +76,7 @@
         .divider { border: none; border-top: 1px dashed var(--dim); margin: 14px 0; }
         .btn-row { display: flex; gap: 10px; margin-top: 4px; }
         .btn {
-            flex: 1; padding: 11px 16px; font-family: inherit; font-size: .8rem; font-weight: bold;
+            flex: 1; padding: 11px 166px; padding: 11px 16px; font-family: inherit; font-size: .8rem; font-weight: bold;
             letter-spacing: .1em; cursor: pointer; border: none; border-radius: 4px; transition: opacity .15s, transform .1s;
         }
         .btn:active:not(:disabled) { transform: scale(.97); }
@@ -144,7 +144,7 @@
         <div class="header">
             <h1>📫 Random Slice Sniper</h1>
             <div class="sub">Puzzel #71 – Dynamisch Plakje van 2³⁵ Keys · Auto-Hop</div>
-            <span class="badge">⚡ CDN MODE</span>
+            <span class="badge">AUTO-HOP MODE</span>
         </div>
         <div class="card">
             <div class="card-title">⚙ Actieve Plakje Configuratie</div>
@@ -156,7 +156,7 @@
                 <label>Scan methode (binnen plakje)</label>
                 <select id="scanMethod">
                     <option value="random">🎲 Willekeurig binnen plakje</option>
-                    <option value="linear" selected>📏 Lineair (Point Addition)</option>
+                    <option value="linear" selected>📏 Lineair (Wiskundige Snelweg!)</option>
                 </select>
             </div>
             <div class="field">
@@ -237,171 +237,220 @@
                 <tbody id="matchTable"><tr class="empty-row"><td colspan="3">Nog geen match gevonden...</td></tr></tbody>
             </table>
         </div>
-        <div class="footer">Random Slice Sniper · Auto-Hop · Point Addition</div>
+        <div class="footer">Random Slice Sniper · Auto-Hop · Point Addition Snelweg</div>
     </div>
 
-    <script>
-        // ================================================================
-        // WERKER CODE MET CDN (100% WERKEND)
-        // ================================================================
-        const workerCode = `
-            importScripts('https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js');
-            importScripts('https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js');
+    <script id="workerCode" type="javascript/worker">
+        self.onerror = function(e) {
+            self.postMessage({ type: 'WORKER_ERROR', message: e.message || 'Onbekende fout in worker' });
+        };
 
-            const ec = new elliptic.ec("secp256k1");
+        try {
+            // We gebruiken nu hash.js in plaats van crypto-js omdat deze direct met rauwe bytes rekent.
+            importScripts(
+                'https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js',
+                'https://cdnjs.cloudflare.com/ajax/libs/hash.js/1.1.7/hash.min.js'
+            );
+        } catch (e) {
+            self.postMessage({ type: 'WORKER_ERROR', message: 'Fout bij laden bibliotheken: ' + e.message });
+        }
 
-            function sha256(hex) { 
-                return CryptoJS.SHA256(CryptoJS.enc.Hex.parse(hex)).toString(); 
-            }
-            function doubleSha256(hex) { 
-                return sha256(sha256(hex)); 
-            }
+        const ec = new elliptic.ec("secp256k1");
 
-            function toBase58(hex) {
-                const ALPHA = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-                const bytes = hex.match(/.{2}/g).map(b => parseInt(b, 16));
-                const digits = [0];
-                for (let i = 0; i < bytes.length; i++) {
-                    let carry = bytes[i];
-                    for (let j = 0; j < digits.length; j++) {
-                        carry += digits[j] << 8;
-                        digits[j] = carry % 58;
-                        carry = (carry / 58) | 0;
-                    }
-                    while (carry > 0) {
-                        digits.push(carry % 58);
-                        carry = (carry / 58) | 0;
-                    }
+        function toBase58(hex) {
+            const ALPHA = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+            const bytes = hex.match(/.{2}/g).map(b => parseInt(b, 16));
+            const digits = [0];
+            for (let i = 0; i < bytes.length; i++) {
+                let carry = bytes[i];
+                for (let j = 0; j < digits.length; j++) {
+                    carry += digits[j] << 8;
+                    digits[j] = carry % 58;
+                    carry = (carry / 58) | 0;
                 }
-                let s = '';
-                for (let i = 0; i < bytes.length && bytes[i] === 0; i++) s += ALPHA[0];
-                for (let i = digits.length - 1; i >= 0; i--) s += ALPHA[digits[i]];
-                return s;
-            }
-
-            function hash160(pubHex) {
-                const sha = sha256(pubHex);
-                return CryptoJS.RIPEMD160(CryptoJS.enc.Hex.parse(sha)).toString();
-            }
-
-            function getRandomBytes(size) {
-                if (self.crypto && self.crypto.getRandomValues) {
-                    const arr = new Uint8Array(size);
-                    self.crypto.getRandomValues(arr);
-                    return arr;
-                } else {
-                    const arr = new Uint8Array(size);
-                    for (let i = 0; i < size; i++) arr[i] = Math.floor(Math.random() * 256);
-                    return arr;
+                while (carry > 0) {
+                    digits.push(carry % 58);
+                    carry = (carry / 58) | 0;
                 }
             }
+            let s = '';
+            for (let i = 0; i < bytes.length && bytes[i] === 0; i++) s += ALPHA[0];
+            for (let i = digits.length - 1; i >= 0; i--) s += ALPHA[digits[i]];
+            return s;
+        }
 
-            function randBigIntInRange(lo, hi) {
-                const range = hi - lo + 1n;
-                if (range <= 0n) return lo;
-                const bits = range.toString(2).length;
-                const bytes = Math.ceil(bits / 8);
-                const arr = getRandomBytes(bytes);
-                const hex = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
-                const rand = BigInt("0x" + hex);
-                return lo + (rand % range);
+        function getRandomBytes(size) {
+            if (self.crypto && self.crypto.getRandomValues) {
+                const arr = new Uint8Array(size);
+                self.crypto.getRandomValues(arr);
+                return arr;
+            } else {
+                const arr = new Uint8Array(size);
+                for (let i = 0; i < size; i++) arr[i] = Math.floor(Math.random() * 256);
+                return arr;
             }
+        }
 
-            self.onmessage = function(e) {
-                const data = e.data;
-                if (data.type === "ADDRESS_SCAN") {
-                    const startKey = BigInt("0x" + data.startHex);
-                    const endKey = BigInt("0x" + data.endHex);
-                    const targetChecksum = data.targetChecksumHex;
-                    const targetAddr = data.targetAddress;
-                    const method = data.method || 'random';
-                    const workerId = data.workerId;
+        function randBigIntInRange(lo, hi) {
+            const range = hi - lo + 1n;
+            if (range <= 0n) return lo;
+            const bits = range.toString(2).length;
+            const bytes = Math.ceil(bits / 8);
+            const arr = getRandomBytes(bytes);
+            const hex = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+            const rand = BigInt("0x" + hex);
+            return lo + (rand % range);
+        }
+
+        self.onmessage = function(e) {
+            const data = e.data;
+            if (data.type === "ADDRESS_SCAN") {
+                const startKey = BigInt("0x" + data.startHex);
+                const endKey = BigInt("0x" + data.endHex);
+                const targetAddr = data.targetAddress;
+                const method = data.method || 'random';
+                const workerId = data.workerId;
+                
+                // Converteer de checksum hex string vooraf naar een array van 4 bytes (getallen)
+                const targetChecksumBytes = [
+                    parseInt(data.targetChecksumHex.slice(0, 2), 16),
+                    parseInt(data.targetChecksumHex.slice(2, 4), 16),
+                    parseInt(data.targetChecksumHex.slice(4, 6), 16),
+                    parseInt(data.targetChecksumHex.slice(6, 8), 16)
+                ];
+
+                self.postMessage({ type: "WORKER_STARTED", workerId: workerId });
+
+                // Pre-allocate een vaste buffer array om Garbage Collection overhead te elimineren
+                const payloadBuf = new Uint8Array(21);
+                payloadBuf[0] = 0; // Bitcoin P2PKH voorvoegsel (0x00)
+
+                if (method === 'linear') {
+                    const G = ec.curve.g;
+                    let currentKey = startKey;
+                    let currentPoint = G.mul(currentKey.toString(16));
                     
-                    self.postMessage({ type: "WORKER_STARTED", workerId: workerId });
+                    // Fors verhoogde batchgrootte omdat de interne loop nu veel lichter draait
+                    const LINEAR_BATCH_SIZE = 8000; 
 
-                    if (method === 'linear') {
-                        const G = ec.curve.g;
-                        let currentKey = startKey;
-                        let currentPoint = G.mul(currentKey.toString(16));
-                        
-                        const LINEAR_BATCH_SIZE = 1000; 
-
-                        function step() {
-                            let batchCount = 0;
-                            for(let i = 0; i < LINEAR_BATCH_SIZE; i++) {
-                                if (currentKey > endKey) {
-                                    if (batchCount > 0) self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
-                                    self.postMessage({ type: "SCAN_DONE", workerId });
+                    function step() {
+                        let batchCount = 0;
+                        for(let i = 0; i < LINEAR_BATCH_SIZE; i++) {
+                            if (currentKey > endKey) {
+                                if (batchCount > 0) self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
+                                self.postMessage({ type: "SCAN_DONE", workerId });
+                                return;
+                            }
+                            
+                            // Vraag de public key op als pure byte array in plaats van een Hex string
+                            const pubBytes = currentPoint.encode('array', true);
+                            
+                            // Hash160 via hash.js direct met getallen arrays
+                            const shaOut = self.hash.sha256().update(pubBytes).digest();
+                            const h160 = self.hash.ripemd160().update(shaOut).digest();
+                            
+                            // Schrijf de bytes direct in de herbruikbare buffer
+                            for (let j = 0; j < 20; j++) {
+                                payloadBuf[j + 1] = h160[j];
+                            }
+                            
+                            // Dubbele SHA256 voor de checksum controle
+                            const checkSha1 = self.hash.sha256().update(payloadBuf).digest();
+                            const checkSha2 = self.hash.sha256().update(checkSha1).digest();
+                            
+                            // Razendsnelle byte-tot-byte vergelijking (Geen string manipulatie nodig in de hot loop!)
+                            if (checkSha2[0] === targetChecksumBytes[0] &&
+                                checkSha2[1] === targetChecksumBytes[1] &&
+                                checkSha2[2] === targetChecksumBytes[2] &&
+                                checkSha2[3] === targetChecksumBytes[3]) {
+                                
+                                const payloadHex = '00' + h160.map(b => b.toString(16).padStart(2, '0')).join('');
+                                const checksumHex = checkSha2.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+                                const fullAddr = toBase58(payloadHex + checksumHex);
+                                
+                                if (fullAddr === targetAddr) {
+                                    const privHex = currentKey.toString(16).padStart(64, '0');
+                                    
+                                    function localDoubleSha256(hex) {
+                                        const bytes = hex.match(/.{2}/g).map(b => parseInt(b, 16));
+                                        const s1 = self.hash.sha256().update(bytes).digest();
+                                        const s2 = self.hash.sha256().update(s1).digest();
+                                        return s2.map(b => b.toString(16).padStart(2, '0')).join('');
+                                    }
+                                    
+                                    const wifPayload = "80" + privHex + "01";
+                                    const doubleSha = localDoubleSha256(wifPayload);
+                                    const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
+                                    self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: fullAddr });
                                     return;
                                 }
-                                
-                                const pubHex = currentPoint.encode('hex', true);
-                                const h160 = hash160(pubHex);
-                                const payload = '00' + h160;
-                                const checksum = doubleSha256(payload).slice(0, 8);
-                                
-                                if (checksum === targetChecksum) {
-                                    const fullAddr = toBase58(payload + checksum);
-                                    if (fullAddr === targetAddr) {
-                                        const privHex = currentKey.toString(16).padStart(64, '0');
-                                        const wifPayload = "80" + privHex + "01";
-                                        const doubleSha = doubleSha256(wifPayload);
-                                        const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
-                                        self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: fullAddr });
-                                        return;
-                                    }
-                                }
-                                
-                                currentPoint = currentPoint.add(G);
-                                currentKey++;
-                                batchCount++;
                             }
-                            self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
-                            setTimeout(step, 0);
+                            
+                            currentPoint = currentPoint.add(G);
+                            currentKey++;
+                            batchCount++;
                         }
-                        step();
-                    } else {
-                        const RANDOM_BATCH_SIZE = 250;
-                        
-                        function checkKeyRandom(privKey) {
-                            try {
-                                const privHex = privKey.toString(16).padStart(64, '0');
-                                const key = ec.keyFromPrivate(privHex);
-                                const pubHex = key.getPublic().encode('hex', true);
-                                const h160 = hash160(pubHex);
-                                const payload = '00' + h160;
-                                const checksum = doubleSha256(payload).slice(0, 8);
-                                if (checksum === targetChecksum) {
-                                    const fullAddr = toBase58(payload + checksum);
-                                    if (fullAddr === targetAddr) {
-                                        const wifPayload = "80" + privHex + "01";
-                                        const doubleSha = doubleSha256(wifPayload);
-                                        const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
-                                        self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: fullAddr });
-                                        return true;
-                                    }
-                                }
-                            } catch (err) {}
-                            return false;
-                        }
-
-                        function randomLoop() {
-                            for(let i = 0; i < RANDOM_BATCH_SIZE; i++) {
-                                const candidate = randBigIntInRange(startKey, endKey);
-                                if (checkKeyRandom(candidate)) return;
-                            }
-                            self.postMessage({ type: "PROGRESS", count: RANDOM_BATCH_SIZE, workerId });
-                            setTimeout(randomLoop, 0);
-                        }
-                        randomLoop();
+                        self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
+                        setTimeout(step, 0);
                     }
+                    step();
+                } else {
+                    const RANDOM_BATCH_SIZE = 4000;
+                    
+                    function randomLoop() {
+                        let batchCount = 0;
+                        for(let i = 0; i < RANDOM_BATCH_SIZE; i++) {
+                            const candidate = randBigIntInRange(startKey, endKey);
+                            const privHex = candidate.toString(16).padStart(64, '0');
+                            
+                            const key = ec.keyFromPrivate(privHex);
+                            const pubBytes = key.getPublic().encode('array', true);
+                            
+                            const shaOut = self.hash.sha256().update(pubBytes).digest();
+                            const h160 = self.hash.ripemd160().update(shaOut).digest();
+                            
+                            for (let j = 0; j < 20; j++) {
+                                payloadBuf[j + 1] = h160[j];
+                            }
+                            
+                            const checkSha1 = self.hash.sha256().update(payloadBuf).digest();
+                            const checkSha2 = self.hash.sha256().update(checkSha1).digest();
+                            
+                            if (checkSha2[0] === targetChecksumBytes[0] &&
+                                checkSha2[1] === targetChecksumBytes[1] &&
+                                checkSha2[2] === targetChecksumBytes[2] &&
+                                checkSha2[3] === targetChecksumBytes[3]) {
+                                
+                                const payloadHex = '00' + h160.map(b => b.toString(16).padStart(2, '0')).join('');
+                                const checksumHex = checkSha2.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+                                const fullAddr = toBase58(payloadHex + checksumHex);
+                                
+                                if (fullAddr === targetAddr) {
+                                    function localDoubleSha256(hex) {
+                                        const bytes = hex.match(/.{2}/g).map(b => parseInt(b, 16));
+                                        const s1 = self.hash.sha256().update(bytes).digest();
+                                        const s2 = self.hash.sha256().update(s1).digest();
+                                        return s2.map(b => b.toString(16).padStart(2, '0')).join('');
+                                    }
+                                    const wifPayload = "80" + privHex + "01";
+                                    const doubleSha = localDoubleSha256(wifPayload);
+                                    const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
+                                    self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: fullAddr });
+                                    return;
+                                }
+                            }
+                            batchCount++;
+                        }
+                        self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
+                        setTimeout(randomLoop, 0);
+                    }
+                    randomLoop();
                 }
-            };
-        `;
+            }
+        };
+    </script>
 
-        // ================================================================
-        // REST VAN DE JS (Gebruikt de nieuwe workerCode)
-        // ================================================================
+    <script>
         (function() {
             let workers = [], totalJumps = 0, cumulativeScanned = 0;
             let currentSliceScanned = 0; 
@@ -463,8 +512,8 @@
             }
 
             function makeWorker() {
-                const blob = new Blob([workerCode], { type: 'text/javascript' });
-                const worker = new Worker(URL.createObjectURL(blob));
+                const code = document.getElementById('workerCode').textContent;
+                const worker = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
 
                 worker.onerror = function(e) {
                     log(`❌ Worker fout: ${e.message || 'Onbekende fout'}`, 'ev-stop');
