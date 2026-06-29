@@ -169,7 +169,7 @@
             <div class="field"><label>Actueel Plakje Eind</label><input id="rangeEnd" value="" type="text" readonly style="color: var(--accent2); background: rgba(0,0,0,0.2);"></div>
             <div style="font-size: 0.65rem; color: var(--muted); margin-top: 6px; text-align: right;">ℹ️ Deze HEX-waarden vernieuwen na het bereiken van je ingestelde key limiet.</div>
             <div class="btn-row">
-                <button class="btn btn-start" id="startBtn">▶ Start Auto-Hop Scan</button>
+                <button class="btn btn-start" id="startBtn" disabled>⏳ Lokaal inladen...</button>
                 <button class="btn btn-stop" id="stopBtn" disabled>■ Stop</button>
             </div>
         </div>
@@ -245,15 +245,6 @@
             self.postMessage({ type: 'WORKER_ERROR', message: e.message || 'Onbekende fout in worker' });
         };
 
-        try {
-            importScripts(
-                'https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js',
-                'https://cdnjs.cloudflare.com/ajax/libs/hash.js/1.1.7/hash.min.js'
-            );
-        } catch (e) {
-            self.postMessage({ type: 'WORKER_ERROR', message: 'Fout bij laden bibliotheken: ' + e.message });
-        }
-
         const ec = new elliptic.ec("secp256k1");
 
         function toBase58(hex) {
@@ -326,7 +317,6 @@
                     const G = ec.curve.g;
                     let currentKey = startKey;
                     
-                    // BUGFIX: Gebruik keyFromPrivate in plaats van G.mul() om een string parser error te vermijden
                     let currentPoint = ec.keyFromPrivate(currentKey.toString(16).padStart(64, '0')).getPublic();
                     
                     const LINEAR_BATCH_SIZE = 8000; 
@@ -340,7 +330,6 @@
                                 return;
                             }
                             
-                            // BUGFIX: Gebruik encode(null, true) voor zuivere byte array output
                             const pubBytes = currentPoint.encode(null, true);
                             
                             const shaOut = hash.sha256().update(pubBytes).digest();
@@ -398,7 +387,6 @@
                             const privHex = candidate.toString(16).padStart(64, '0');
                             
                             const key = ec.keyFromPrivate(privHex);
-                            // BUGFIX: encode(null, true) voor betrouwbare ruwe array weergave
                             const pubBytes = key.getPublic().encode(null, true);
                             
                             const shaOut = hash.sha256().update(pubBytes).digest();
@@ -452,6 +440,7 @@
             let slicesVisited = 1;       
             let targetLimit = 10000000;  
             let startTime = 0, isRunning = false;
+            let globalWorkerUrl = null; // Globaal opslagpunt voor de massieve blob
             
             const SLICE_SIZE = 34359738368n; 
             const PUZZLE_71_TOTAL = 1180591620717411303424n; 
@@ -474,6 +463,36 @@
             function setStatus(txt, cls = '') {
                 statusVal.textContent = txt;
                 statusVal.className = cls;
+            }
+
+            // NIEUW: Fetch de bibliotheken in de MAIN thread en combineer ze tot 1 blob
+            async function bootSystem() {
+                try {
+                    log("📡 Ophalen van externe cryptografische bibliotheken...", "ev-epoch");
+                    
+                    const [ellReq, hashReq] = await Promise.all([
+                        fetch('https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js'),
+                        fetch('https://cdnjs.cloudflare.com/ajax/libs/hash.js/1.1.7/hash.min.js')
+                    ]);
+                    
+                    if (!ellReq.ok || !hashReq.ok) throw new Error("Netwerkfout bij CDN.");
+                    
+                    const ellText = await ellReq.text();
+                    const hashText = await hashReq.text();
+                    const workerText = document.getElementById('workerCode').textContent;
+                    
+                    // Concateneer alles tot 1 massief JS bestand in het geheugen
+                    const combinedBlob = new Blob([ellText, '\n\n', hashText, '\n\n', workerText], { type: 'application/javascript' });
+                    globalWorkerUrl = URL.createObjectURL(combinedBlob);
+                    
+                    startBtn.disabled = false;
+                    startBtn.textContent = "▶ Start Auto-Hop Scan";
+                    log("✅ Systeem succesvol opgestart. Klaar voor gebruik!", "ev-found");
+                } catch (e) {
+                    log("❌ Fatale fout tijdens inladen: " + e.message, "ev-stop");
+                    log("Zet eventuele adblockers uit of controleer je internetverbinding.", "ev-stop");
+                    startBtn.textContent = "❌ Start mislukt";
+                }
             }
 
             function killWorkers() {
@@ -502,13 +521,11 @@
                 document.getElementById('rangeEnd').value = sliceEnd.toString(16);
 
                 log(`🎯 Nieuw uniek plakje afgesneden (2³⁵ keys).`);
-                log(`📍 Start HEX: 0x${sliceStart.toString(16).padStart(64, '0')}`);
-                log(`📍 Eind HEX:  0x${sliceEnd.toString(16).padStart(64, '0')}`);
             }
 
             function makeWorker() {
-                const code = document.getElementById('workerCode').textContent;
-                const worker = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+                // Gebruik de vooraf klaargemaakte Blob URL die *alle* bibliotheken bevat
+                const worker = new Worker(globalWorkerUrl);
 
                 worker.onerror = function(e) {
                     log(`❌ Worker fout: ${e.message || 'Onbekende fout'}`, 'ev-stop');
@@ -730,7 +747,7 @@
                 spawnWorkers();
             }
 
-            startBtn.onclick = () => { if (!isRunning) startAddressScan(); };
+            startBtn.onclick = () => { if (!isRunning && globalWorkerUrl) startAddressScan(); };
             stopBtn.onclick = () => {
                 setRunning(false);
                 killWorkers();
@@ -741,6 +758,9 @@
             generateRandomSlice();
             setInterval(() => { if (isRunning) updateAllStats(); }, 500);
             updateAllStats();
+            
+            // Start the boot sequence!
+            bootSystem();
         })();
     </script>
 </body>
