@@ -237,9 +237,10 @@
                 <tbody id="matchTable"><tr class="empty-row"><td colspan="3">Nog geen match gevonden...</td></tr></tbody>
             </table>
         </div>
-        <div class="footer">Random Slice Sniper · Auto-Hop · Point Addition Snelweg</div>
+        <div class="footer">Random Slice Sniper · Auto-Hop · Zero-Allocation Bit-Mapping</div>
     </div>
 
+    <!-- GEOPTIMALISEERDE WORKER CODE (GEEN STRINGS MEER IN LINEAIRE MODUS!) -->
     <script id="workerCode" type="javascript/worker">
         self.onerror = function(e) {
             self.postMessage({ type: 'WORKER_ERROR', message: e.message || 'Onbekende fout in worker' });
@@ -255,18 +256,6 @@
         }
 
         const ec = new elliptic.ec("secp256k1");
-
-        // OPTIMALISATIE: We houden de data zoveel mogelijk in CryptoJS WordArrays
-        // om de zware conversies naar strings en hex te vermijden tijdens de loop.
-        function fastHash160Hex(pubHex) {
-            const pubKeyWords = CryptoJS.enc.Hex.parse(pubHex);
-            const sha = CryptoJS.SHA256(pubKeyWords);
-            const r160 = CryptoJS.RIPEMD160(sha);
-            return r160.toString(CryptoJS.enc.Hex); // Geeft direct de 20-byte (40 char) hex terug
-        }
-
-        function sha256(hex) { return CryptoJS.SHA256(CryptoJS.enc.Hex.parse(hex)).toString(); }
-        function doubleSha256(hex) { return sha256(sha256(hex)); }
 
         function toBase58(hex) {
             const ALPHA = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -319,8 +308,6 @@
                 const startKey = BigInt("0x" + data.startHex);
                 const endKey = BigInt("0x" + data.endHex);
                 
-                // OPTIMALISATIE: We hebben het zware dubbel SHA256 checksum proces verwijderd.
-                // We zoeken direct op de 20-byte (40 character) RIPEMD160 hash!
                 const targetH160Hex = data.targetH160Hex; 
                 const targetAddr = data.targetAddress;
                 const method = data.method || 'random';
@@ -332,12 +319,18 @@
                     // --- POINT ADDITION SNELWEG (Lineair) ---
                     const G = ec.curve.g;
                     let currentKey = startKey;
-                    
                     let currentPoint = G.mul(currentKey.toString(16));
                     
-                    // OPTIMALISATIE: Veel grotere batch size (5000 ipv 1000) 
-                    // Dit vermindert communicatie overhead tussen worker en main thread
                     const LINEAR_BATCH_SIZE = 5000; 
+
+                    // TRUC 1: Target Pre-Processing (Int32 Arrays in plaats van HEX Strings)
+                    const targetHexWords = CryptoJS.enc.Hex.parse(targetH160Hex).words;
+                    const t0 = targetHexWords[0], t1 = targetHexWords[1], 
+                          t2 = targetHexWords[2], t3 = targetHexWords[3], t4 = targetHexWords[4];
+
+                    // TRUC 2: Voorkom Garbage Collection door hergebruik van WordArray
+                    const pubKeyWords = CryptoJS.lib.WordArray.create(new Array(9), 33);
+                    const pubWords = pubKeyWords.words;
 
                     function step() {
                         let batchCount = 0;
@@ -348,17 +341,34 @@
                                 return;
                             }
                             
-                            const pubHex = currentPoint.encode('hex', true);
+                            // TRUC 3: Zero-Allocation Direct Bit Mapping 
+                            const xArray = currentPoint.getX().toArray('be', 32);
+                            const prefix = currentPoint.getY().isEven() ? 0x02 : 0x03;
                             
-                            // Grote versnelling: we doen nog maar 1 snelle SHA256 + RIPEMD160
-                            const currentH160 = fastHash160Hex(pubHex);
+                            pubWords[0] = (prefix << 24) | (xArray[0] << 16) | (xArray[1] << 8) | xArray[2];
+                            pubWords[1] = (xArray[3] << 24) | (xArray[4] << 16) | (xArray[5] << 8) | xArray[6];
+                            pubWords[2] = (xArray[7] << 24) | (xArray[8] << 16) | (xArray[9] << 8) | xArray[10];
+                            pubWords[3] = (xArray[11] << 24) | (xArray[12] << 16) | (xArray[13] << 8) | xArray[14];
+                            pubWords[4] = (xArray[15] << 24) | (xArray[16] << 16) | (xArray[17] << 8) | xArray[18];
+                            pubWords[5] = (xArray[19] << 24) | (xArray[20] << 16) | (xArray[21] << 8) | xArray[22];
+                            pubWords[6] = (xArray[23] << 24) | (xArray[24] << 16) | (xArray[25] << 8) | xArray[26];
+                            pubWords[7] = (xArray[27] << 24) | (xArray[28] << 16) | (xArray[29] << 8) | xArray[30];
+                            pubWords[8] = (xArray[31] << 24);
+
+                            // Hash rechtstreeks vanuit het 32-bit register
+                            const sha = CryptoJS.SHA256(pubKeyWords);
+                            const r160 = CryptoJS.RIPEMD160(sha);
                             
-                            if (currentH160 === targetH160Hex) {
-                                // Als we een match hebben op de hash, dán pas berekenen we de WIF en volledige data.
+                            // TRUC 4: Snelle Integer Vergelijking
+                            if (r160.words[0] === t0 && r160.words[1] === t1 &&
+                                r160.words[2] === t2 && r160.words[3] === t3 && r160.words[4] === t4) {
+                                
                                 const privHex = currentKey.toString(16).padStart(64, '0');
                                 const wifPayload = "80" + privHex + "01";
-                                const doubleSha = doubleSha256(wifPayload);
+                                const parsedPayload = CryptoJS.enc.Hex.parse(wifPayload);
+                                const doubleSha = CryptoJS.SHA256(CryptoJS.SHA256(parsedPayload)).toString(CryptoJS.enc.Hex);
                                 const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
+                                
                                 self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: targetAddr });
                                 return;
                             }
@@ -372,7 +382,7 @@
                     }
                     step();
                 } else {
-                    // --- ORIGINELE METHODE (Random) ---
+                    // --- ORIGINELE METHODE (Random modus voor willekeurige sprongen) ---
                     const RANDOM_BATCH_SIZE = 500;
                     
                     function checkKeyRandom(privKey) {
@@ -381,11 +391,14 @@
                             const key = ec.keyFromPrivate(privHex);
                             const pubHex = key.getPublic().encode('hex', true);
                             
-                            const currentH160 = fastHash160Hex(pubHex);
+                            const pubKeyWords = CryptoJS.enc.Hex.parse(pubHex);
+                            const sha = CryptoJS.SHA256(pubKeyWords);
+                            const r160 = CryptoJS.RIPEMD160(sha).toString(CryptoJS.enc.Hex);
                             
-                            if (currentH160 === targetH160Hex) {
+                            if (r160 === targetH160Hex) {
                                 const wifPayload = "80" + privHex + "01";
-                                const doubleSha = doubleSha256(wifPayload);
+                                const parsedPayload = CryptoJS.enc.Hex.parse(wifPayload);
+                                const doubleSha = CryptoJS.SHA256(CryptoJS.SHA256(parsedPayload)).toString(CryptoJS.enc.Hex);
                                 const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
                                 self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: targetAddr });
                                 return true;
@@ -408,6 +421,7 @@
         };
     </script>
 
+    <!-- HOOFD SCRIPT VOOR DE UI EN HET BEHEREN VAN DE WORKERS -->
     <script>
         (function() {
             let workers = [], totalJumps = 0, cumulativeScanned = 0;
@@ -574,8 +588,6 @@
                 try {
                     const decodedHex = fromBase58(targetAddr);
                     if (decodedHex.length !== 50) throw new Error('Geen geldig P2PKH adres.');
-                    // Een gedecodeerd adres is 25 bytes (50 hex karakters).
-                    // Byte 0 (char 0-2) is network byte. Bytes 1-20 (char 2-42) is de H160 (RIPEMD160 hash).
                     targetH160Hex = decodedHex.substring(2, 42); 
                 } catch (e) { log('❌ Ongeldig adres: ' + e.message); return; }
 
@@ -660,7 +672,7 @@
                         type: "ADDRESS_SCAN",
                         startHex: segStart,
                         endHex: segEnd,
-                        targetH160Hex: targetH160Hex, // Stuur de rauwe H160 mee
+                        targetH160Hex: targetH160Hex,
                         targetAddress: targetAddr,
                         method: method,
                         workerId: i
@@ -685,7 +697,7 @@
                 log(`🔍 Auto-Hop geactiveerd met doel ${targetLimit.toLocaleString()} keys per plakje.`, 'ev-epoch');
                 
                 if (document.getElementById('scanMethod').value === 'linear') {
-                    log(`⚡ Wiskundige Snelweg (Point Addition) is ACTIEF!`, 'ev-found');
+                    log(`⚡ Zero-Allocation Bit-Mapping is ACTIEF!`, 'ev-found');
                 }
 
                 spawnWorkers();
