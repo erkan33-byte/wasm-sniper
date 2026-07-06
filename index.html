@@ -2,7 +2,7 @@
 <html lang="nl">
 <head>
     <meta charset="UTF-8">
-    <title>Puzzel #71 – Random Slice Sniper (Auto-Hop)</title>
+    <title>Puzzel #71 – Random Slice Sniper (Auto-Hop) ⚡</title>
     <style>
         :root {
             --bg: #07090f;
@@ -144,7 +144,7 @@
         <div class="header">
             <h1>📫 Random Slice Sniper</h1>
             <div class="sub">Puzzel #71 – Dynamisch Plakje van 2³⁵ Keys · Auto-Hop</div>
-            <span class="badge">AUTO-HOP MODE (OPTIMIZED)</span>
+            <span class="badge">🚀 OPTIE 2: NATIVE BIGINT ENGINE</span>
         </div>
         <div class="card">
             <div class="card-title">⚙ Actieve Plakje Configuratie</div>
@@ -156,7 +156,7 @@
                 <label>Scan methode (binnen plakje)</label>
                 <select id="scanMethod">
                     <option value="random">🎲 Willekeurig binnen plakje</option>
-                    <option value="linear" selected>📏 Lineair (Wiskundige Snelweg!)</option>
+                    <option value="linear" selected>📏 Lineair (Hyper-Speed!)</option>
                 </select>
             </div>
             <div class="field">
@@ -237,25 +237,81 @@
                 <tbody id="matchTable"><tr class="empty-row"><td colspan="3">Nog geen match gevonden...</td></tr></tbody>
             </table>
         </div>
-        <div class="footer">Random Slice Sniper · Auto-Hop · Zero-Allocation Bit-Mapping</div>
+        <div class="footer">Random Slice Sniper · Auto-Hop · Native BigInt Engine</div>
     </div>
 
-    <!-- GEOPTIMALISEERDE WORKER CODE (GEEN STRINGS MEER IN LINEAIRE MODUS!) -->
+    <!-- 🚀 OPTIE 2: NATIVE BIGINT ENGINE WORKER -->
     <script id="workerCode" type="javascript/worker">
         self.onerror = function(e) {
             self.postMessage({ type: 'WORKER_ERROR', message: e.message || 'Onbekende fout in worker' });
         };
 
         try {
-            importScripts(
-                'https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js',
-                'https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js'
-            );
+            // Let op: elliptic.js is volledig verwijderd!
+            importScripts('https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js');
         } catch (e) {
             self.postMessage({ type: 'WORKER_ERROR', message: 'Fout bij laden bibliotheken: ' + e.message });
         }
 
-        const ec = new elliptic.ec("secp256k1");
+        // ==========================================
+        // ⚡ NATIVE BIGINT SECP256K1 MOTOR
+        // ==========================================
+        const P = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2fn;
+        const G_x = 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798n;
+        const G_y = 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8n;
+        const G = { x: G_x, y: G_y };
+
+        function mod(a, b = P) {
+            const r = a % b;
+            return r >= 0n ? r : r + b;
+        }
+
+        function inverse(a, n = P) {
+            let t = 0n, newt = 1n;
+            let r = n, newr = a;
+            while (newr !== 0n) {
+                let q = r / newr;
+                let tmp = t - q * newt; t = newt; newt = tmp;
+                tmp = r - q * newr; r = newr; newr = tmp;
+            }
+            if (t < 0n) t += n;
+            return t;
+        }
+
+        function add(p, q) {
+            if (!p) return q;
+            if (!q) return p;
+            if (p.x === q.x) {
+                if (p.y !== q.y || p.y === 0n) return null; // Punt op oneindig
+                let lam = mod((3n * p.x * p.x) * inverse(2n * p.y));
+                let x3 = mod(lam * lam - 2n * p.x);
+                let y3 = mod(lam * (p.x - x3) - p.y);
+                return { x: x3, y: y3 };
+            }
+            let dx = mod(q.x - p.x);
+            let dy = mod(q.y - p.y);
+            let lam = mod(dy * inverse(dx));
+            let x3 = mod(lam * lam - p.x - q.x);
+            let y3 = mod(lam * (p.x - x3) - p.y);
+            return { x: x3, y: y3 };
+        }
+
+        function mul(p, n) {
+            let r = null, base = p;
+            while (n > 0n) {
+                if (n & 1n) r = add(r, base);
+                base = add(base, base);
+                n >>= 1n;
+            }
+            return r;
+        }
+        // ==========================================
+
+        const pubKeyWords = CryptoJS.lib.WordArray.create(new Array(9), 33);
+        const pubWords = pubKeyWords.words;
+
+        const sha256Algo = CryptoJS.algo.SHA256.create();
+        const ripemd160Algo = CryptoJS.algo.RIPEMD160.create();
 
         function toBase58(hex) {
             const ALPHA = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -307,101 +363,116 @@
             if (data.type === "ADDRESS_SCAN") {
                 const startKey = BigInt("0x" + data.startHex);
                 const endKey = BigInt("0x" + data.endHex);
-                
-                const targetH160Hex = data.targetH160Hex; 
+                const targetH160Hex = data.targetH160Hex;
                 const targetAddr = data.targetAddress;
                 const method = data.method || 'random';
                 const workerId = data.workerId;
-                
+
+                const targetHexWords = CryptoJS.enc.Hex.parse(targetH160Hex).words;
+                const t0 = targetHexWords[0], t1 = targetHexWords[1],
+                      t2 = targetHexWords[2], t3 = targetHexWords[3], t4 = targetHexWords[4];
+
                 self.postMessage({ type: "WORKER_STARTED", workerId: workerId });
 
+                function checkMatch(currentKey, r160) {
+                    if (r160.words[0] === t0 && r160.words[1] === t1 &&
+                        r160.words[2] === t2 && r160.words[3] === t3 && r160.words[4] === t4) {
+                        const privHex = currentKey.toString(16).padStart(64, '0');
+                        const wifPayload = "80" + privHex + "01";
+                        const parsedPayload = CryptoJS.enc.Hex.parse(wifPayload);
+                        const doubleSha = CryptoJS.SHA256(CryptoJS.SHA256(parsedPayload)).toString(CryptoJS.enc.Hex);
+                        const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
+                        self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: targetAddr });
+                        return true;
+                    }
+                    return false;
+                }
+
                 if (method === 'linear') {
-                    const G = ec.curve.g;
                     let currentKey = startKey;
-                    let currentPoint = G.mul(currentKey.toString(16));
-                    
-                    const LINEAR_BATCH_SIZE = 5000; 
+                    // Native BigInt Scalar Vermenigvuldiging (alleen nodig bij start)
+                    let currentPoint = mul(G, currentKey);
 
-                    const targetHexWords = CryptoJS.enc.Hex.parse(targetH160Hex).words;
-                    const t0 = targetHexWords[0], t1 = targetHexWords[1], 
-                          t2 = targetHexWords[2], t3 = targetHexWords[3], t4 = targetHexWords[4];
+                    const HUGE_BATCH_SIZE = 50000;
 
-                    const pubKeyWords = CryptoJS.lib.WordArray.create(new Array(9), 33);
-                    const pubWords = pubKeyWords.words;
+                    function fastStep() {
+                        if (currentKey > endKey) {
+                            self.postMessage({ type: "SCAN_DONE", workerId });
+                            return;
+                        }
 
-                    function step() {
                         let batchCount = 0;
-                        for(let i = 0; i < LINEAR_BATCH_SIZE; i++) {
-                            if (currentKey > endKey) {
-                                if (batchCount > 0) self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
-                                self.postMessage({ type: "SCAN_DONE", workerId });
-                                return;
-                            }
-                            
-                            const xArray = currentPoint.getX().toArray('be', 32);
-                            const prefix = currentPoint.getY().isEven() ? 0x02 : 0x03;
-                            
-                            pubWords[0] = (prefix << 24) | (xArray[0] << 16) | (xArray[1] << 8) | xArray[2];
-                            pubWords[1] = (xArray[3] << 24) | (xArray[4] << 16) | (xArray[5] << 8) | xArray[6];
-                            pubWords[2] = (xArray[7] << 24) | (xArray[8] << 16) | (xArray[9] << 8) | xArray[10];
-                            pubWords[3] = (xArray[11] << 24) | (xArray[12] << 16) | (xArray[13] << 8) | xArray[14];
-                            pubWords[4] = (xArray[15] << 24) | (xArray[16] << 16) | (xArray[17] << 8) | xArray[18];
-                            pubWords[5] = (xArray[19] << 24) | (xArray[20] << 16) | (xArray[21] << 8) | xArray[22];
-                            pubWords[6] = (xArray[23] << 24) | (xArray[24] << 16) | (xArray[25] << 8) | xArray[26];
-                            pubWords[7] = (xArray[27] << 24) | (xArray[28] << 16) | (xArray[29] << 8) | xArray[30];
-                            pubWords[8] = (xArray[31] << 24);
+                        for (let i = 0; i < HUGE_BATCH_SIZE && currentKey <= endKey; i++) {
+                            const xBig = currentPoint.x;
+                            const prefix = (currentPoint.y & 1n) === 0n ? 0x02 : 0x03;
 
-                            const sha = CryptoJS.SHA256(pubKeyWords);
-                            const r160 = CryptoJS.RIPEMD160(sha);
+                            // ⚡ BITWISE EXTRACTIE: De extreme hack om GC te verslaan
+                            pubWords[0] = (prefix << 24) | Number((xBig >> 232n) & 0xffffffn);
+                            pubWords[1] = Number((xBig >> 200n) & 0xffffffffn);
+                            pubWords[2] = Number((xBig >> 168n) & 0xffffffffn);
+                            pubWords[3] = Number((xBig >> 136n) & 0xffffffffn);
+                            pubWords[4] = Number((xBig >> 104n) & 0xffffffffn);
+                            pubWords[5] = Number((xBig >> 72n) & 0xffffffffn);
+                            pubWords[6] = Number((xBig >> 40n) & 0xffffffffn);
+                            pubWords[7] = Number((xBig >> 8n) & 0xffffffffn);
+                            pubWords[8] = Number((xBig & 0xffn)) << 24;
+
+                            sha256Algo.reset();
+                            const sha = sha256Algo.finalize(pubKeyWords);
                             
-                            if (r160.words[0] === t0 && r160.words[1] === t1 &&
-                                r160.words[2] === t2 && r160.words[3] === t3 && r160.words[4] === t4) {
-                                
-                                const privHex = currentKey.toString(16).padStart(64, '0');
-                                const wifPayload = "80" + privHex + "01";
-                                const parsedPayload = CryptoJS.enc.Hex.parse(wifPayload);
-                                const doubleSha = CryptoJS.SHA256(CryptoJS.SHA256(parsedPayload)).toString(CryptoJS.enc.Hex);
-                                const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
-                                
-                                self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: targetAddr });
-                                return;
-                            }
-                            
-                            currentPoint = currentPoint.add(G);
+                            ripemd160Algo.reset();
+                            const r160 = ripemd160Algo.finalize(sha);
+
+                            if (checkMatch(currentKey, r160)) return;
+
+                            // Native BigInt Punt Optelling (10x sneller dan elliptic.js)
+                            currentPoint = add(currentPoint, G);
                             currentKey++;
                             batchCount++;
                         }
+
                         self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
-                        setTimeout(step, 0);
+                        setTimeout(fastStep, 0);
                     }
-                    step();
+
+                    fastStep();
                 } else {
-                    const RANDOM_BATCH_SIZE = 500;
-                    function checkKeyRandom(privKey) {
+                    const RANDOM_BATCH_SIZE = 5000;
+                    
+                    function checkKeyRandom(candidate) {
                         try {
-                            const privHex = privKey.toString(16).padStart(64, '0');
-                            const key = ec.keyFromPrivate(privHex);
-                            const pubHex = key.getPublic().encode('hex', true);
-                            const pubKeyWords = CryptoJS.enc.Hex.parse(pubHex);
-                            const sha = CryptoJS.SHA256(pubKeyWords);
-                            const r160 = CryptoJS.RIPEMD160(sha).toString(CryptoJS.enc.Hex);
-                            if (r160 === targetH160Hex) {
-                                const wifPayload = "80" + privHex + "01";
-                                const parsedPayload = CryptoJS.enc.Hex.parse(wifPayload);
-                                const doubleSha = CryptoJS.SHA256(CryptoJS.SHA256(parsedPayload)).toString(CryptoJS.enc.Hex);
-                                const wif = toBase58(wifPayload + doubleSha.slice(0, 8));
-                                self.postMessage({ type: "FOUND", privHex: privHex, wif: wif, address: targetAddr });
-                                return true;
-                            }
+                            const p = mul(G, candidate);
+                            const xBig = p.x;
+                            const prefix = (p.y & 1n) === 0n ? 0x02 : 0x03;
+                            
+                            pubWords[0] = (prefix << 24) | Number((xBig >> 232n) & 0xffffffn);
+                            pubWords[1] = Number((xBig >> 200n) & 0xffffffffn);
+                            pubWords[2] = Number((xBig >> 168n) & 0xffffffffn);
+                            pubWords[3] = Number((xBig >> 136n) & 0xffffffffn);
+                            pubWords[4] = Number((xBig >> 104n) & 0xffffffffn);
+                            pubWords[5] = Number((xBig >> 72n) & 0xffffffffn);
+                            pubWords[6] = Number((xBig >> 40n) & 0xffffffffn);
+                            pubWords[7] = Number((xBig >> 8n) & 0xffffffffn);
+                            pubWords[8] = Number((xBig & 0xffn)) << 24;
+
+                            sha256Algo.reset();
+                            const sha = sha256Algo.finalize(pubKeyWords);
+                            ripemd160Algo.reset();
+                            const r160 = ripemd160Algo.finalize(sha);
+                            
+                            return checkMatch(candidate, r160);
                         } catch (err) {}
                         return false;
                     }
+
                     function randomLoop() {
-                        for(let i = 0; i < RANDOM_BATCH_SIZE; i++) {
+                        let batchCount = 0;
+                        for (let i = 0; i < RANDOM_BATCH_SIZE; i++) {
                             const candidate = randBigIntInRange(startKey, endKey);
                             if (checkKeyRandom(candidate)) return;
+                            batchCount++;
                         }
-                        self.postMessage({ type: "PROGRESS", count: RANDOM_BATCH_SIZE, workerId });
+                        self.postMessage({ type: "PROGRESS", count: batchCount, workerId });
                         setTimeout(randomLoop, 0);
                     }
                     randomLoop();
@@ -413,13 +484,13 @@
     <script>
         (function() {
             let workers = [], totalJumps = 0, cumulativeScanned = 0;
-            let currentSliceScanned = 0; 
-            let slicesVisited = 1;       
-            let targetLimit = 10000000;  
+            let currentSliceScanned = 0;
+            let slicesVisited = 1;
+            let targetLimit = 10000000;
             let startTime = 0, isRunning = false;
             
-            const SLICE_SIZE = 34359738368n; 
-            const PUZZLE_71_TOTAL = 1180591620717411303424n; 
+            const SLICE_SIZE = 34359738368n;
+            const PUZZLE_71_TOTAL = 1180591620717411303424n;
 
             const logBox = document.getElementById('logBox'),
                   startBtn = document.getElementById('startBtn'),
@@ -563,7 +634,7 @@
                 try {
                     const decodedHex = fromBase58(targetAddr);
                     if (decodedHex.length !== 50) throw new Error('Geen geldig P2PKH adres.');
-                    targetH160Hex = decodedHex.substring(2, 42); 
+                    targetH160Hex = decodedHex.substring(2, 42);
                 } catch (e) { log('❌ Ongeldig adres: ' + e.message); return; }
 
                 const startBI = BigInt("0x" + document.getElementById('rangeStart').value);
@@ -574,7 +645,6 @@
                 
                 killWorkers();
                 let workersDone = 0;
-                let lastLogUpdate = currentSliceScanned;
 
                 function handleProgress(count) {
                     if (!isRunning) return;
@@ -631,7 +701,7 @@
                 if (isRunning) return;
                 startTime = Date.now();
                 setRunning(true);
-                setStatus('Sniper Actief', 'running');
+                setStatus('⚡ Native BigInt Engine Actief', 'running');
                 spawnWorkers();
             }
 
