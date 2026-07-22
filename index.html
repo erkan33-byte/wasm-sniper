@@ -393,7 +393,8 @@
                     // Native BigInt Scalar Vermenigvuldiging (alleen nodig bij start)
                     let currentPoint = mul(G, currentKey);
 
-                    const HUGE_BATCH_SIZE = 50000;
+                    // OPTIMALISATIE 1: Batch size verhoogd van 50.000 naar 1.000.000
+                    const HUGE_BATCH_SIZE = 1000000;
 
                     function fastStep() {
                         if (currentKey > endKey) {
@@ -437,7 +438,8 @@
 
                     fastStep();
                 } else {
-                    const RANDOM_BATCH_SIZE = 5000;
+                    // OPTIMALISATIE 2: Willekeurige batch size verhoogd
+                    const RANDOM_BATCH_SIZE = 100000;
                     
                     function checkKeyRandom(candidate) {
                         try {
@@ -708,7 +710,9 @@
             startBtn.onclick = () => { if (!isRunning) startAddressScan(); };
             stopBtn.onclick = () => { setRunning(false); killWorkers(); setStatus('Gestopt'); };
             generateRandomSlice();
-            setInterval(() => { if (isRunning) updateAllStats(); }, 500);
+            
+            // OPTIMALISATIE 3: Schermupdates flink vertraagd van 0.5s naar 3s (3000ms)
+            setInterval(() => { if (isRunning) updateAllStats(); }, 3000);
         })();
     </script>
 </body>
