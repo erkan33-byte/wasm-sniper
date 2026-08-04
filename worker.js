@@ -3,9 +3,26 @@ let wasmInstance;
 async function initWasm() {
     const response = await fetch('sniper.wasm');
     const bytes = await response.arrayBuffer();
-    const { instance } = await WebAssembly.instantiate(bytes);
+    
+    // De WASM heeft deze hulpfunctie nodig voor 128-bit berekeningen
+    const importObject = {
+        env: {
+            __multi3: function(a_low, a_high, b_low, b_high) {
+                // Eenvoudige implementatie van 128-bit vermenigvuldiging
+                let a = (BigInt(a_high) << 64n) | BigInt(a_low);
+                let b = (BigInt(b_high) << 64n) | BigInt(b_low);
+                let res = a * b;
+                // De browser verwacht de resultaten terug in specifieke registers (vaak via globals of return)
+                // Let op: Afhankelijk van hoe je WASM is gecompileerd, kan dit complexer zijn.
+                return res; 
+            }
+        }
+    };
+
+    const { instance } = await WebAssembly.instantiate(bytes, importObject);
     wasmInstance = instance;
 }
+
 
 function bigIntToWasm(bi, ptr) {
     const view = new BigUint64Array(wasmInstance.exports.memory.buffer, ptr, 4);
