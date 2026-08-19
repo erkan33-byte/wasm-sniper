@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Native WASM BSGS secp256k1 Intervalscanner</title>
+<style>
+:root{color-scheme:dark;--bg:#071018;--card:#101b27;--line:#294056;--green:#50e3a4;--blue:#47b8f5;--red:#e05252;--muted:#9db0c2}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#e5eef7;font:15px system-ui,sans-serif}.app{max-width:920px;margin:auto;padding:28px 16px}.title{margin:0;color:var(--green);font-size:1.35rem}.sub{color:var(--muted);margin:8px 0 24px;line-height:1.45}.card{background:var(--card);border:1px solid #253749;border-radius:10px;padding:18px;margin:14px 0}.grid{display:grid;grid-template-columns:260px 1fr;gap:12px;align-items:center}.grid label{color:#b9c6d3;font-size:.9rem}input,select{width:100%;background:#071018;border:1px solid #385067;border-radius:6px;padding:10px;color:var(--green);font:14px ui-monospace,monospace}select{font-family:system-ui,sans-serif}input[readonly]{color:#a9bbcb;background:#0a141e}.buttons{display:flex;gap:10px;margin-top:18px}button{padding:11px 16px;border:0;border-radius:6px;font-weight:700;cursor:pointer;background:var(--green);color:#04130c}button.stop{background:var(--red);color:#fff}button:disabled{opacity:.5;cursor:not-allowed}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{background:#071018;border-radius:6px;padding:12px}.label{font-size:.72rem;color:var(--muted);text-transform:uppercase}.value{font:700 1rem ui-monospace,monospace;color:var(--green);margin-top:5px;word-break:break-all}.note{font-size:.88rem;color:#c4d1dc;line-height:1.5}.note strong{color:var(--blue)}#log{white-space:pre-wrap;background:#020609;border-radius:6px;padding:12px;min-height:140px;max-height:280px;overflow:auto;color:#b9d8c9;font:12px ui-monospace,monospace}@media(max-width:700px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body><main class="app">
+<h1 class="title">Native WASM BSGS secp256k1 Intervalscanner</h1>
+<p class="sub">Exacte Baby-Step Giant-Step-zoeker voor een <strong>bekende gecomprimeerde public key</strong>. Iedere worker maakt een native baby-stepcache en controleert daarna wiskundig of de bijbehorende private key in zijn interval ligt. Dit is geen P2PKH-adresbruteforce en de weergegeven dekking is exact intervalbereik, niet het aantal afzonderlijk gehashte adressen.</p>
+<section class="card"><div class="grid">
+<label for="pubkey">Target public key (compressed)</label><input id="pubkey" value="03afdda497369e219a2c1c369954a930e4d3740968e5e4352475bcffce3140dae5">
+<label for="rangeMin">Minimum (hex, inclusief)</label><input id="rangeMin" value="1000000000000000000000000000000000000">
+<label for="rangeMax">Maximum (hex, inclusief)</label><input id="rangeMax" value="1ffffffffffffffffffffffffffffffffffff">
+<label for="sliceSize">Keys per BSGS-slice</label><select id="sliceSize"><option value="10000000">10.000.000</option><option value="34359738368" selected>2^35 = 34.359.738.368</option><option value="68719476736">2^36 = 68.719.476.736</option></select>
+<label for="threads">BSGS-workers</label><input id="threads" type="number" min="1" max="8" value="1">
+<label>Actieve worker-slices</label><input id="slices" readonly value="Nog niet gestart">
+</div><div class="buttons"><button id="start">Start native BSGS-scan</button><button id="stop" class="stop" disabled>Stop</button></div></section>
+<section class="card"><div class="stats"><div class="stat"><div class="label">Status</div><div id="status" class="value">Gereed</div></div><div class="stat"><div class="label">Exact intervalbereik</div><div id="total" class="value">0</div></div><div class="stat"><div class="label">Exact afgedekt / s</div><div id="speed" class="value">0 /s</div></div><div class="stat"><div class="label">Voltooide BSGS-slices</div><div id="rounds" class="value">0</div></div></div></section>
+<section class="card note"><strong>Rekenkundige grens:</strong> elke worker gebruikt ongeveer 32 MiB WASM-geheugen voor maximaal 2^36 keys per slice. Begin daarom met één worker. Met meerdere workers worden onafhankelijke willekeurige slices gebruikt; een herhaling is theoretisch mogelijk. De BSGS-methode is alleen bruikbaar als je de target-public key hebt.</section>
+<section class="card"><div id="log">Wacht op start.</div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let running=false,workers=[],session=0,total=0n,complete=0,startTime=0,activeStarts=[];
+function log(text){$('log').textContent=`${new Date().toLocaleTimeString('nl-NL')}  ${text}\n`+$('log').textContent}
+function cleanHex(s){const h=s.trim().replace(/^0x/i,'');if(!/^[0-9a-f]+$/i.test(h))throw Error('Ongeldige hexwaarde');return h}
+function cfg(){const min=BigInt('0x'+cleanHex($('rangeMin').value)),max=BigInt('0x'+cleanHex($('rangeMax').value)),requestedSize=BigInt($('sliceSize').value);if(min>max)throw Error('Minimum ligt na maximum');const span=max-min+1n,size=requestedSize<span?requestedSize:span;const pub=cleanHex($('pubkey').value);if(!/^(02|03)[0-9a-f]{64}$/i.test(pub))throw Error('Public key moet gecomprimeerd zijn: 02/03 gevolgd door 64 hextekens');return{min,max,size,pub,threads:Math.max(1,Math.min(8,Number($('threads').value)||1))}}
+function randomBelow(bound){const limit=1n<<256n,cutoff=limit-(limit%bound),b=new Uint8Array(32);for(;;){crypto.getRandomValues(b);let x=0n;for(const v of b)x=(x<<8n)|BigInt(v);if(x<cutoff)return x%bound}}
+function reserve(c){const span=c.max-c.min+1n;return c.min+randomBelow(span-c.size+1n)}
+function render(){if(!running)return;const sec=(performance.now()-startTime)/1000;$('total').textContent=total.toLocaleString('nl-NL');$('speed').textContent=sec>0?Math.round(Number(total)/sec).toLocaleString('nl-NL')+' /s':'0 /s';$('rounds').textContent=complete.toLocaleString('nl-NL');requestAnimationFrame(render)}
+function stop(text='Gestopt'){const sec=(performance.now()-startTime)/1000;$('total').textContent=total.toLocaleString('nl-NL');$('speed').textContent=sec>0?Math.round(Number(total)/sec).toLocaleString('nl-NL')+' /s':'0 /s';$('rounds').textContent=complete.toLocaleString('nl-NL');running=false;session++;for(const w of workers)w.terminate();workers=[];$('start').disabled=false;$('stop').disabled=true;$('status').textContent=text;log(text)}
+function launch(c,id,token){if(!running)return;const begin=reserve(c),end=begin+c.size-1n;activeStarts[id]=`W${id+1}: 0x${begin.toString(16)}:0x${end.toString(16)}`;$('slices').value=activeStarts.join('  |  ');const w=new Worker('worker_bsgs_native.js?build=20260819');workers[id]=w;w.onmessage=({data:d})=>{if(!running||d.token!==token)return;if(d.type==='ready'){$('status').textContent=`BSGS cache voorbereiden (m=${d.m.toLocaleString('nl-NL')})`;log(`Worker ${id+1}: m=${d.m}, giant steps=${d.giants}.`)}else if(d.type==='done'){total+=BigInt(d.scanned);complete++;launch(c,id,token)}else if(d.type==='found'){total+=BigInt(d.scanned);$('status').textContent='MATCH: 0x'+d.key;log(`MATCH: 0x${d.key}`);stop('MATCH: 0x'+d.key)}else if(d.type==='error'){log(`Worker ${id+1} fout: ${d.error}`);stop('Fout')}};w.onerror=e=>{if(running){log(`Worker ${id+1} fout: ${e.message}`);stop('Fout')}};w.postMessage({type:'scan',token,startHex:begin.toString(16),endHex:end.toString(16),targetPubKey:c.pub})}
+$('start').onclick=()=>{try{const c=cfg();running=true;session++;total=0n;complete=0;activeStarts=[];startTime=performance.now();$('start').disabled=true;$('stop').disabled=false;$('status').textContent='Workers starten';const token=String(session);log(`Start: ${c.threads} BSGS-worker(s), slice=${c.size.toString()} keys.`);requestAnimationFrame(render);for(let i=0;i<c.threads;i++)launch(c,i,token)}catch(e){log('Invoerfout: '+e.message)}};
+$('stop').onclick=()=>stop('Gestopt door gebruiker.');
+</script></body></html>
