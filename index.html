@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Native WASM Jacobian Slice-Hop P2PKH Scanner</title>
+<style>
+:root{color-scheme:dark;--bg:#071018;--card:#101b27;--line:#294056;--green:#50e3a4;--blue:#47b8f5;--red:#e05252;--muted:#9db0c2}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#e5eef7;font:15px system-ui,sans-serif}.app{max-width:900px;margin:auto;padding:28px 16px}.title{margin:0;color:var(--green);font-size:1.35rem}.sub{color:var(--muted);margin:8px 0 24px;line-height:1.45}.card{background:var(--card);border:1px solid #253749;border-radius:10px;padding:18px;margin:14px 0}.grid{display:grid;grid-template-columns:250px 1fr;gap:12px;align-items:center}.grid label{color:#b9c6d3;font-size:.9rem}input,select{box-sizing:border-box;width:100%;background:#071018;border:1px solid #385067;border-radius:6px;padding:10px;color:var(--green);font:14px ui-monospace,monospace}select{font-family:system-ui,sans-serif}input[readonly]{color:#a9bbcb;background:#0a141e}.buttons{display:flex;gap:10px;margin-top:18px}button{padding:11px 16px;border:0;border-radius:6px;font-weight:700;cursor:pointer;background:var(--green);color:#04130c}button.stop{background:var(--red);color:#fff}button:disabled{opacity:.5;cursor:not-allowed}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{background:#071018;border-radius:6px;padding:12px}.label{font-size:.72rem;color:var(--muted);text-transform:uppercase}.value{font:700 1rem ui-monospace,monospace;color:var(--green);margin-top:5px;word-break:break-all}.bar{height:8px;background:#071018;border-radius:6px;overflow:hidden;margin-top:14px}.fill{height:100%;width:0;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .15s}.note{font-size:.88rem;color:#c4d1dc;line-height:1.5}.note strong{color:var(--blue)}#log{white-space:pre-wrap;background:#020609;border-radius:6px;padding:12px;min-height:120px;max-height:260px;overflow:auto;color:#b9d8c9;font:12px ui-monospace,monospace}@media(max-width:700px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body><main class="app">
+<h1 class="title">Native WASM Jacobian P2PKH Slice-Hop Scanner</h1>
+<p class="sub">Native C naar WASM: Jacobian mixed addition, normalisatie van maximaal 10.000 punten met één batch-inversie en vaste-lengte SHA-256/RIPEMD-160. Iedere worker reserveert een eigen lease; workers starten willekeurig en hoppen onafhankelijk zonder actieve overlap.</p>
+<section class="card"><div class="grid">
+<label for="address">Target BTC-adres</label><input id="address" value="1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU">
+<label for="rangeMin">Minimum (hex, inclusief)</label><input id="rangeMin" value="400000000000000000">
+<label for="rangeMax">Maximum (hex, inclusief)</label><input id="rangeMax" value="7fffffffffffffffff">
+<label for="sliceSize">Keys per workerlease</label><input id="sliceSize" type="number" min="1000" step="1000000" value="10000000">
+<label for="mode">Slice-methode</label><select id="mode"><option value="random" selected>Willekeurige zelfstandige leases</option><option value="sequential">Sequentiële zelfstandige leases</option></select>
+<label for="threads">CPU-workers</label><input id="threads" type="number" min="1" max="16" value="4">
+<label>Actieve workerleases (inclusief)</label><input id="sliceRange" readonly value="Nog niet gereserveerd">
+</div><div class="buttons"><button id="start">Start slice-hopscan</button><button id="stop" class="stop" disabled>Stop</button></div></section>
+<section class="card"><div class="stats"><div class="stat"><div class="label">Status</div><div id="status" class="value">Gereed</div></div><div class="stat"><div class="label">Totaal gescande keys</div><div id="total" class="value">0</div></div><div class="stat"><div class="label">Sessie-snelheid</div><div id="speed" class="value">0 /s</div></div><div class="stat"><div class="label">Workerleases bezocht</div><div id="sliceCount" class="value">0</div></div></div><div class="bar"><div id="fill" class="fill"></div></div><p id="coverage" class="note">0 / 0 keys in de actuele slice.</p></section>
+<section class="card note"><strong>Correctheid:</strong> iedere worker ontvangt zijn eigen volledige lease. Bij willekeurige modus reserveert elke worker een cryptografisch willekeurige start en blijft die lease vrij van alle andere actieve workerleases. Een worker die klaar is hopt zelfstandig; andere workers blijven hun eigen lease volgen. Willekeurige leases kunnen theoretisch een historisch voltooide lease herhalen.</section>
+<section class="card"><div id="log">Wacht op start.</div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let workers=[],running=false,session=0,totalScanned=0n,leasesVisited=0,startTime=0,sequentialCursor=0n;
+const activeLeases=new Map(),LOG_LIMIT=200;
+function log(text){const box=$('log'),line=`22:44:25  ${text}`;const lines=[line,...box.textContent.split('\n').filter(Boolean)].slice(0,LOG_LIMIT);box.textContent=lines.join('\n');}
+function cleanHex(s){s=s.trim().replace(/^0x/i,'');if(!/^[0-9a-f]+$/i.test(s))throw Error('Ongeldige hexwaarde');return s}
+function fmtHex(x){return '0x'+x.toString(16)}
+function readConfig(){const min=BigInt('0x'+cleanHex($('rangeMin').value)),max=BigInt('0x'+cleanHex($('rangeMax').value));if(min>max)throw Error('Minimum ligt na maximum');const raw=$('sliceSize').value.trim();if(!/^\d+$/.test(raw)||BigInt(raw)<1000n)throw Error('Keys per workerlease moet minstens 1000 zijn');const threads=Math.max(1,Math.min(16,Number($('threads').value)||1));return{address:$('address').value.trim(),min,max,sliceSize:BigInt(raw),threads,mode:$('mode').value}}
+function randomBelow(bound){if(bound<=1n)return 0n;if(!globalThis.crypto?.getRandomValues)throw Error('Willekeurige leases vereisen HTTPS of localhost');const full=1n<<256n,cutoff=full-(full%bound),bytes=new Uint8Array(32);for(;;){crypto.getRandomValues(bytes);let n=0n;for(const b of bytes)n=(n<<8n)|BigInt(b);if(n<cutoff)return n%bound}}
+function overlaps(a,b){return a.start<=b.end&&b.start<=a.end}
+function candidateIsFree(candidate){for(const lease of activeLeases.values())if(overlaps(candidate,lease))return false;return true}
+function reserveLease(c,id){const span=c.max-c.min+1n, nominal=c.sliceSize<span?c.sliceSize:span;
+  if(c.mode==='sequential'){
+    for(let tries=0;tries<activeLeases.size+2;tries++){
+      if(sequentialCursor<c.min||sequentialCursor>c.max)sequentialCursor=c.min;
+      const length=nominal>(c.max-sequentialCursor+1n)?(c.max-sequentialCursor+1n):nominal;
+      const lease={id,start:sequentialCursor,end:sequentialCursor+length-1n,length,scanned:0n};
+      sequentialCursor=lease.end===c.max?c.min:lease.end+1n;
+      if(candidateIsFree(lease)){activeLeases.set(id,lease);return lease;}
+    }
+  } else {
+    const room=span-nominal+1n;
+    for(let tries=0;tries<256;tries++){
+      const start=c.min+randomBelow(room),lease={id,start,end:start+nominal-1n,length:nominal,scanned:0n};
+      if(candidateIsFree(lease)){activeLeases.set(id,lease);return lease;}
+    }
+  }
+  throw Error('Kon geen niet-overlappende lease reserveren');
+}
+function renderLeases(){const list=[...activeLeases.values()].sort((a,b)=>a.id-b.id);$('sliceRange').value=list.length?list.map(x=>`W${x.id+1}: ${fmtHex(x.start)} : ${fmtHex(x.end)}`).join(' | '):'Geen actieve leases';}
+function updateMetrics(){const sec=(performance.now()-startTime)/1000;$('total').textContent=totalScanned.toLocaleString('nl-NL');$('speed').textContent=sec>0?Math.round(Number(totalScanned)/sec).toLocaleString('nl-NL')+' /s':'0 /s';$('sliceCount').textContent=leasesVisited.toLocaleString('nl-NL');const list=[...activeLeases.values()];const done=list.reduce((s,x)=>s+x.scanned,0n),cap=list.reduce((s,x)=>s+x.length,0n),pct=cap?Number(done*10000n/cap)/100:0;$('fill').style.width=Math.min(100,pct)+'%';$('coverage').textContent=list.length?`${done.toLocaleString('nl-NL')} / ${cap.toLocaleString('nl-NL')} keys in ${list.length} zelfstandige actieve workerlease(s) (${Math.min(100,pct).toFixed(2)}%).`:'Geen actieve workerlease.';}
+function render(){if(!running)return;updateMetrics();requestAnimationFrame(render)}
+function terminateWorkers(){for(const w of workers)if(w)w.terminate();workers=[];activeLeases.clear();renderLeases()}
+function stop(reason='Gestopt'){updateMetrics();running=false;session++;terminateWorkers();$('start').disabled=false;$('stop').disabled=true;$('status').textContent=reason;log(reason)}
+function assignLease(c,id,token){if(!running||token!==session)return;let lease;try{lease=reserveLease(c,id)}catch(e){stop('Leasefout');log('Leasefout: '+e.message);return}leasesVisited++;renderLeases();log(`Worker ${id+1}: eigen lease ${fmtHex(lease.start)} : ${fmtHex(lease.end)} (${lease.length.toString()} keys).`);const worker=workers[id];if(!worker){activeLeases.delete(id);stop('Worker ontbreekt');return}worker.postMessage({type:'scan',token,startHex:lease.start.toString(16),endHex:lease.end.toString(16),address:c.address});}
+function startWorker(c,id,token){const w=new Worker('worker_native_jacobian.js?build=20260822-independent-leases');workers[id]=w;w.onmessage=({data:d})=>{if(!running||d.token!==token)return;const lease=activeLeases.get(id);if(d.type==='ready'){if(id===0)$('status').textContent='Native WASM scant met zelfstandige leases'}else if(d.type==='progress'){const count=BigInt(d.count);totalScanned+=count;if(lease)lease.scanned+=count}else if(d.type==='found'){const count=BigInt(d.count);totalScanned+=count;if(lease)lease.scanned+=count;updateMetrics();log(`MATCH gevonden door worker ${id+1}: 0x${d.key}`);stop('MATCH: 0x'+d.key)}else if(d.type==='done'){activeLeases.delete(id);renderLeases();assignLease(c,id,token)}else if(d.type==='error'){log(`Worker ${id+1} fout: ${d.error}`);stop('Fout')}};w.onerror=e=>{if(running){log(`Worker ${id+1} fout: ${e.message}`);stop('Fout')}};assignLease(c,id,token)}
+$('start').onclick=()=>{try{const c=readConfig();running=true;session++;const token=session;totalScanned=0n;leasesVisited=0;activeLeases.clear();sequentialCursor=c.min;startTime=performance.now();$('start').disabled=true;$('stop').disabled=false;$('status').textContent='Zelfstandige workerleases reserveren';$('fill').style.width='0';$('sliceRange').value='Leases worden gereserveerd';log(`Start: ${c.threads} zelfstandige workers; elke workerlease=${c.sliceSize.toString()} keys; modus=${c.mode==='random'?'willekeurig':'sequentieel'}.`);requestAnimationFrame(render);for(let i=0;i<c.threads;i++)startWorker(c,i,token)}catch(e){log('Invoerfout: '+e.message)}};
+$('stop').onclick=()=>stop('Gestopt door gebruiker.');
+</script></body></html>
