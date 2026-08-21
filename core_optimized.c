@@ -1,82 +1,126 @@
 #include <stdint.h>
 #include <stddef.h>
-
 void *memset(void *s,int c,size_t n){unsigned char *p=s;while(n--)*p++=(unsigned char)c;return s;}
 void *memcpy(void *d,const void *s,size_t n){unsigned char *a=d;const unsigned char *b=s;while(n--)*a++=*b++;return d;}
 
-#define MAX_BABIES 262145u
-#define HASH_CAP 524288u
-#define BLOCK 10000u
+#define MAX_BATCH 10000
 
 typedef unsigned __int128 u128;
 typedef struct { uint64_t v[4]; } fe;
 typedef struct { fe x,y,z; int inf; } jac;
-typedef struct { fe x,y; } aff;
 
-static const fe FP={{0xFFFFFFFEFFFFFC2FULL,0xFFFFFFFFFFFFFFFFULL,0xFFFFFFFFFFFFFFFFULL,0xFFFFFFFFFFFFFFFFULL}};
-static const fe GX={{0x59F2815B16F81798ULL,0x029BFCDB2DCE28D9ULL,0x55A06295CE870B07ULL,0x79BE667EF9DCBBACULL}};
-static const fe GY={{0x9C47D08FFB10D4B8ULL,0xFD17B448A6855419ULL,0x5DA4FBFC0E1108A8ULL,0x483ADA7726A3C465ULL}};
-static const uint64_t PM2[4]={0xFFFFFFFEFFFFFC2DULL,0xFFFFFFFFFFFFFFFFULL,0xFFFFFFFFFFFFFFFFULL,0xFFFFFFFFFFFFFFFFULL};
-/* (p+1)/4, because p = 3 (mod 4). */
-static const uint64_t SQRT_EXP[4]={0xFFFFFFFFBFFFFF0CULL,0xFFFFFFFFFFFFFFFFULL,0xFFFFFFFFFFFFFFFFULL,0x3FFFFFFFFFFFFFFFULL};
+static const fe FP = {{0xFFFFFFFEFFFFFC2FULL,0xFFFFFFFFFFFFFFFFULL,0xFFFFFFFFFFFFFFFFULL,0xFFFFFFFFFFFFFFFFULL}};
+static const fe GX = {{0x59F2815B16F81798ULL,0x029BFCDB2DCE28D9ULL,0x55A06295CE870B07ULL,0x79BE667EF9DCBBACULL}};
+static const fe GY = {{0x9C47D08FFB10D4B8ULL,0xFD17B448A6855419ULL,0x5DA4FBFC0E1108A8ULL,0x483ADA7726A3C465ULL}};
 
 static int cmp4(const uint64_t *a,const uint64_t *b){for(int i=3;i>=0;i--){if(a[i]>b[i])return 1;if(a[i]<b[i])return -1;}return 0;}
-static int feq(fe a,fe b){return a.v[0]==b.v[0]&&a.v[1]==b.v[1]&&a.v[2]==b.v[2]&&a.v[3]==b.v[3];}
-static int fzero(fe a){return !(a.v[0]|a.v[1]|a.v[2]|a.v[3]);}
 static void sub4(uint64_t *a,const uint64_t *b){uint64_t borrow=0;for(int i=0;i<4;i++){uint64_t x=a[i],y=b[i]+borrow;uint64_t c=(borrow?y<=b[i]:0);a[i]=x-y;borrow=(x<y)||c;}}
 static void addwide(uint64_t *t,int p,uint64_t a){while(a&&p<10){u128 s=(u128)t[p]+a;t[p]=(uint64_t)s;a=(uint64_t)(s>>64);p++;}}
 static void addwide128(uint64_t *t,int p,u128 a){addwide(t,p,(uint64_t)a);addwide(t,p+1,(uint64_t)(a>>64));}
-static fe reduce10(uint64_t t[10]){for(int pass=0;pass<12;pass++)for(int i=9;i>=4;i--){uint64_t q=t[i];if(!q)continue;t[i]=0;addwide128(t,i-4,(u128)q*977);addwide128(t,i-4,(u128)q<<32);}fe r={{t[0],t[1],t[2],t[3]}};while(cmp4(r.v,FP.v)>=0)sub4(r.v,FP.v);return r;}
+
+/* p = 2^256 - 2^32 - 977. Fold every high limb by 2^256 = 2^32 + 977. */
+static fe reduce10(uint64_t t[10]){
+  for(int pass=0;pass<1;pass++) for(int i=9;i>=4;i--){uint64_t q=t[i];if(!q)continue;t[i]=0;addwide128(t,i-4,(u128)q*977);addwide128(t,i-4,(u128)q<<32);}
+  fe r={{t[0],t[1],t[2],t[3]}};
+  while(cmp4(r.v,FP.v)>=0) sub4(r.v,FP.v);
+  return r;
+}
 static fe fadd(fe a,fe b){uint64_t t[10]={0};for(int i=0;i<4;i++){u128 s=(u128)a.v[i]+b.v[i]+t[i];t[i]=(uint64_t)s;addwide(t,i+1,(uint64_t)(s>>64));}return reduce10(t);}
 static fe fsub(fe a,fe b){if(cmp4(a.v,b.v)>=0){fe r=a;sub4(r.v,b.v);return r;}fe n=FP;sub4(n.v,b.v);return fadd(a,n);}
 static fe fmul(fe a,fe b){uint64_t t[10]={0};for(int i=0;i<4;i++){u128 carry=0;for(int j=0;j<4;j++){u128 s=(u128)a.v[i]*b.v[j]+t[i+j]+carry;t[i+j]=(uint64_t)s;carry=s>>64;}addwide128(t,i+4,carry);}return reduce10(t);}
-static fe fsqr(fe a){return fmul(a,a);}
+static fe fsqr(fe a){return fmul(a,a);} 
 static fe fdouble(fe a){return fadd(a,a);}
 static fe ftriple(fe a){return fadd(fdouble(a),a);}
 static fe feight(fe a){a=fdouble(a);a=fdouble(a);return fdouble(a);}
-static fe fpowexp(fe a,const uint64_t e[4]){fe r={{1,0,0,0}};for(int i=255;i>=0;i--){r=fsqr(r);if((e[i>>6]>>(i&63))&1ULL)r=fmul(r,a);}return r;}
-/* Vaste secp256k1-keten voor a^(p-2): 255 squares en 15 multiplies. */
+static int fzero(fe a){return !(a.v[0]|a.v[1]|a.v[2]|a.v[3]);}
+/* Vaste secp256k1 addition-chain voor a^(p-2), p=2^256-2^32-977.
+ * 255 squares + 15 multiplies in plaats van de generieke bitloop met circa 249 multiplies. */
 static fe fsqrn(fe a,int n){for(int i=0;i<n;i++)a=fsqr(a);return a;}
-static fe fpow(fe a){fe x1=a;fe x2=fmul(fsqrn(x1,1),x1);fe x3=fmul(fsqrn(x2,1),x1);fe x6=fmul(fsqrn(x3,3),x3);fe x9=fmul(fsqrn(x6,3),x3);fe x11=fmul(fsqrn(x9,2),x2);fe x22=fmul(fsqrn(x11,11),x11);fe x44=fmul(fsqrn(x22,22),x22);fe x88=fmul(fsqrn(x44,44),x44);fe r=fmul(fsqrn(x88,88),x88);r=fmul(fsqrn(r,44),x44);r=fmul(fsqrn(r,3),x3);r=fmul(fsqrn(r,23),x22);r=fmul(fsqrn(r,5),x1);r=fmul(fsqrn(r,3),x2);r=fsqrn(r,2);return fmul(r,a);}
-
-static jac jbase(void){jac p={GX,GY,{{1,0,0,0}},0};return p;}
-static jac jdouble(jac p){if(p.inf||fzero(p.y)){p.inf=1;return p;}fe a=fsqr(p.x),b=fsqr(p.y),c=fsqr(b);fe d=fdouble(fsub(fsqr(fadd(p.x,b)),fadd(a,c)));fe e=ftriple(a),f=fsqr(e);jac r;r.x=fsub(f,fdouble(d));r.y=fsub(fmul(e,fsub(d,r.x)),feight(c));r.z=fdouble(fmul(p.y,p.z));r.inf=0;return r;}
-static jac jadd_aff(jac p,aff q){if(p.inf){jac r={q.x,q.y,{{1,0,0,0}},0};return r;}fe z2=fsqr(p.z),u2=fmul(q.x,z2),s2=fmul(q.y,fmul(p.z,z2));fe h=fsub(u2,p.x),rr=fsub(s2,p.y);if(fzero(h)){if(fzero(rr))return jdouble(p);p.inf=1;return p;}fe hh=fsqr(h),hhh=fmul(h,hh),v=fmul(p.x,hh);jac r;r.x=fsub(fsub(fsqr(rr),hhh),fdouble(v));r.y=fsub(fmul(rr,fsub(v,r.x)),fmul(p.y,hhh));r.z=fmul(p.z,h);r.inf=0;return r;}
-static jac jaddg(jac p){aff g={GX,GY};return jadd_aff(p,g);}
-static jac jneg(jac p){if(!p.inf&&!fzero(p.y))p.y=fsub(FP,p.y);return p;}
-static jac jmul(const uint8_t k[32]){jac r={{{0,0,0,0}},{{0,0,0,0}},{{0,0,0,0}},1};for(int i=0;i<256;i++){if(!r.inf)r=jdouble(r);if((k[i>>3]>>(7-(i&7)))&1)r=jaddg(r);}return r;}
-static jac jmul_u32(uint32_t k){uint8_t s[32]={0};s[28]=(uint8_t)(k>>24);s[29]=(uint8_t)(k>>16);s[30]=(uint8_t)(k>>8);s[31]=(uint8_t)k;return jmul(s);}
-
-static jac work[BLOCK];
-static fe prefix[BLOCK],invz[BLOCK];
-static aff babies[MAX_BABIES];
-static uint32_t slots[HASH_CAP];
-static uint32_t cached_m=0;
-static aff cached_minus_mg;
-static uint8_t cached_pub[33];
-static aff cached_target;
-static int cached_target_valid=0;
-
-static void batch_invert(uint32_t n){fe acc={{1,0,0,0}};for(uint32_t i=0;i<n;i++){prefix[i]=acc;if(!work[i].inf)acc=fmul(acc,work[i].z);}acc=fpow(acc);for(uint32_t ii=n;ii>0;ii--){uint32_t i=ii-1;if(work[i].inf){invz[i]=(fe){{0,0,0,0}};}else{invz[i]=fmul(acc,prefix[i]);acc=fmul(acc,work[i].z);}}}
-static aff to_aff(uint32_t i){fe iz2=fsqr(invz[i]);aff a;a.x=fmul(work[i].x,iz2);a.y=fmul(work[i].y,fmul(invz[i],iz2));return a;}
-static uint32_t mix_x(fe x){uint64_t z=x.v[0]^x.v[1]^x.v[2]^x.v[3];z^=z>>33;z*=0xff51afd7ed558ccdULL;z^=z>>33;z*=0xc4ceb9fe1a85ec53ULL;z^=z>>33;return (uint32_t)(z^(z>>32));}
-static void table_insert(uint32_t index){uint32_t p=mix_x(babies[index].x)&(HASH_CAP-1u);while(slots[p])p=(p+1u)&(HASH_CAP-1u);slots[p]=index+1u;}
-static int table_find(aff a,uint32_t *out){uint32_t p=mix_x(a.x)&(HASH_CAP-1u);for(uint32_t n=0;n<HASH_CAP;n++){uint32_t v=slots[p];if(!v)return 0;uint32_t i=v-1u;if(feq(babies[i].x,a.x)){*out=i;return 1;}p=(p+1u)&(HASH_CAP-1u);}return 0;}
-
-/* Build and cache {G,2G,...,mG}; m must be <= 262145. */
-int bsgs_prepare(uint32_t m){if(!m||m>MAX_BABIES)return -1;if(cached_m==m)return 0;cached_m=0;memset(slots,0,sizeof(slots));jac p=jbase();uint32_t off=0;while(off<m){uint32_t n=m-off;if(n>BLOCK)n=BLOCK;for(uint32_t i=0;i<n;i++){work[i]=p;p=jaddg(p);}batch_invert(n);for(uint32_t i=0;i<n;i++)babies[off+i]=to_aff(i);off+=n;}for(uint32_t i=0;i<m;i++)table_insert(i);/* De laatste baby is exact mG; hergebruik die affine waarde in plaats van een extra scalar multiplication. */cached_minus_mg=babies[m-1u];if(!fzero(cached_minus_mg.y))cached_minus_mg.y=fsub(FP,cached_minus_mg.y);cached_m=m;return 0;}
-
-static int decompress(const uint8_t pub[33],aff *out){if(pub[0]!=2&&pub[0]!=3)return 0;fe x={{0,0,0,0}};for(int i=0;i<32;i++)x.v[(31-i)>>3]|=(uint64_t)pub[i+1]<<(((31-i)&7)*8);if(cmp4(x.v,FP.v)>=0)return 0;fe rhs=fadd(fmul(fsqr(x),x),(fe){{7,0,0,0}});fe y=fpowexp(rhs,SQRT_EXP);if(!feq(fsqr(y),rhs))return 0;if((y.v[0]&1ULL)!=(uint64_t)(pub[0]&1))y=fsub(FP,y);out->x=x;out->y=y;return 1;}
-static int cmpbe(const uint8_t *a,const uint8_t *b){for(int i=0;i<32;i++){if(a[i]>b[i])return 1;if(a[i]<b[i])return -1;}return 0;}
-static int bytes_eq(const uint8_t *a,const uint8_t *b,uint32_t n){for(uint32_t i=0;i<n;i++)if(a[i]!=b[i])return 0;return 1;}
-static int cached_decompress(const uint8_t pub[33],aff *out){if(!cached_target_valid||!bytes_eq(pub,cached_pub,33)){if(!decompress(pub,&cached_target))return 0;memcpy(cached_pub,pub,33);cached_target_valid=1;}*out=cached_target;return 1;}
-static void add_be_u64(const uint8_t in[32],uint64_t add,uint8_t out[32]){memcpy(out,in,32);uint64_t carry=add;for(int i=31;i>=0&&carry;i--){uint64_t s=(uint64_t)out[i]+(carry&255ULL);out[i]=(uint8_t)s;carry=(carry>>8)+(s>>8);}}
-static int candidate(const uint8_t start[32],const uint8_t end[32],uint64_t delta,uint8_t out[32]){add_be_u64(start,delta,out);return cmpbe(out,end)<=0;}
-
-/* Returns 1 for match, 0 for no match, negative for invalid input. giants = ceil((end-start+1)/m). */
-int bsgs_scan(const uint8_t pub[33],const uint8_t start[32],const uint8_t end[32],uint32_t m,uint32_t giants,uint8_t out[32]){
- if(cmpbe(start,end)>0||!m||!giants)return -1;if(bsgs_prepare(m))return -2;aff target;if(!cached_decompress(pub,&target))return -3;
- jac s=jmul(start);jac q=jadd_aff(jneg(s),target);if(q.inf){memcpy(out,start,32);return 1;}
- uint32_t gbase=0;while(gbase<giants){uint32_t n=giants-gbase;if(n>BLOCK)n=BLOCK;for(uint32_t i=0;i<n;i++){work[i]=q;q=jadd_aff(q,cached_minus_mg);}batch_invert(n);for(uint32_t i=0;i<n;i++){if(work[i].inf)continue;aff a=to_aff(i);uint32_t bi;if(!table_find(a,&bi))continue;uint64_t base=(uint64_t)(gbase+i)*(uint64_t)m;if(feq(babies[bi].y,a.y)){uint64_t d=base+(uint64_t)bi+1ULL;if(candidate(start,end,d,out))return 1;}else{fe ny=fsub(FP,babies[bi].y);if(feq(ny,a.y)&&base>=(uint64_t)bi+1ULL){uint64_t d=base-((uint64_t)bi+1ULL);if(candidate(start,end,d,out))return 1;}}}gbase+=n;}return 0;
+static fe fpow(fe a){
+  fe x1=a;
+  fe x2=fmul(fsqrn(x1,1),x1);
+  fe x3=fmul(fsqrn(x2,1),x1);
+  fe x6=fmul(fsqrn(x3,3),x3);
+  fe x9=fmul(fsqrn(x6,3),x3);
+  fe x11=fmul(fsqrn(x9,2),x2);
+  fe x22=fmul(fsqrn(x11,11),x11);
+  fe x44=fmul(fsqrn(x22,22),x22);
+  fe x88=fmul(fsqrn(x44,44),x44);
+  fe r=fmul(fsqrn(x88,88),x88);
+  r=fmul(fsqrn(r,44),x44);
+  r=fmul(fsqrn(r,3),x3);
+  r=fmul(fsqrn(r,23),x22);
+  r=fmul(fsqrn(r,5),x1);
+  r=fmul(fsqrn(r,3),x2);
+  r=fsqrn(r,2);
+  return fmul(r,a);
 }
 
+static jac jbase(void){jac p={GX,GY,{{1,0,0,0}},0};return p;}
+static jac jdouble(jac p){if(p.inf||fzero(p.y)) {p.inf=1;return p;}fe A=fsqr(p.x),B=fsqr(p.y),C=fsqr(B);fe D=fdouble(fsub(fsqr(fadd(p.x,B)),fadd(A,C)));fe E=ftriple(A),F=fsqr(E);jac r;r.x=fsub(F,fdouble(D));r.y=fsub(fmul(E,fsub(D,r.x)),feight(C));r.z=fdouble(fmul(p.y,p.z));r.inf=0;return r;}
+static jac jaddg(jac p){if(p.inf)return jbase();fe z2=fsqr(p.z),u2=fmul(GX,z2),s2=fmul(GY,fmul(p.z,z2));fe h=fsub(u2,p.x),rr=fsub(s2,p.y);if(fzero(h)){p.inf=1;return p;}fe hh=fsqr(h),hhh=fmul(h,hh),v=fmul(p.x,hh);jac q;q.x=fsub(fsub(fsqr(rr),hhh),fdouble(v));q.y=fsub(fmul(rr,fsub(v,q.x)),fmul(p.y,hhh));q.z=fmul(p.z,h);q.inf=0;return q;}
+static jac jmul(const uint8_t k[32]){jac r={{{0,0,0,0}},{{0,0,0,0}},{{0,0,0,0}},1};for(int i=0;i<256;i++){if(!r.inf)r=jdouble(r);if((k[i>>3]>>(7-(i&7)))&1)r=jaddg(r);}return r;}
+
+static jac points[MAX_BATCH];
+static fe prefix[MAX_BATCH],zinv[MAX_BATCH];
+static jac current;
+
+static void be32(uint8_t out[32],fe x){for(int i=0;i<4;i++)for(int j=0;j<8;j++)out[31-(i*8+j)]=(uint8_t)(x.v[i]>>(j*8));}
+
+static uint32_t ror32(uint32_t x,int n){return (x>>n)|(x<<(32-n));}
+static const uint32_t K256[64]={
+0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+static void sha33(const uint8_t in[33],uint8_t out[32]){
+ uint32_t w[16];
+ for(int i=0;i<8;i++)w[i]=((uint32_t)in[i*4]<<24)|((uint32_t)in[i*4+1]<<16)|((uint32_t)in[i*4+2]<<8)|in[i*4+3];
+ w[8]=((uint32_t)in[32]<<24)|0x00800000;for(int i=9;i<15;i++)w[i]=0;w[15]=264;
+ uint32_t a=0x6a09e667,b=0xbb67ae85,c=0x3c6ef372,d=0xa54ff53a,e=0x510e527f,f=0x9b05688c,g=0x1f83d9ab,h=0x5be0cd19;
+ for(int i=0;i<64;i++){
+  uint32_t v;
+  if(i<16)v=w[i];else{int s=i&15;uint32_t p15=w[(i-15)&15],p2=w[(i-2)&15];v=w[s]+(ror32(p15,7)^ror32(p15,18)^(p15>>3))+w[(i-7)&15]+(ror32(p2,17)^ror32(p2,19)^(p2>>10));w[s]=v;}
+  uint32_t t1=h+(ror32(e,6)^ror32(e,11)^ror32(e,25))+((e&f)^((~e)&g))+K256[i]+v,t2=(ror32(a,2)^ror32(a,13)^ror32(a,22))+((a&b)^(a&c)^(b&c));
+  h=g;g=f;f=e;e=d+t1;d=c;c=b;b=a;a=t1+t2;
+ }
+ uint32_t q[8]={a+0x6a09e667,b+0xbb67ae85,c+0x3c6ef372,d+0xa54ff53a,e+0x510e527f,f+0x9b05688c,g+0x1f83d9ab,h+0x5be0cd19};for(int i=0;i<8;i++){out[i*4]=q[i]>>24;out[i*4+1]=q[i]>>16;out[i*4+2]=q[i]>>8;out[i*4+3]=q[i];}
+}
+
+
+static uint32_t rol32(uint32_t x,int n){return (x<<n)|(x>>(32-n));}
+static const uint8_t RL[80]={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,7,4,13,1,10,6,15,3,12,0,9,5,2,14,11,8,3,10,14,4,9,15,8,1,2,7,0,6,13,11,5,12,1,9,11,10,0,8,12,4,13,3,7,15,14,5,6,2,4,0,5,9,7,12,2,10,14,1,3,8,11,6,15,13};
+static const uint8_t RR[80]={5,14,7,0,9,2,11,4,13,6,15,8,1,10,3,12,6,11,3,7,0,13,5,10,14,15,8,12,4,9,1,2,15,5,1,3,7,14,6,9,11,8,12,2,10,0,4,13,8,6,4,1,3,11,15,0,5,12,2,13,9,7,10,14,12,15,10,4,1,5,8,7,6,2,13,14,0,3,9,11};
+static const uint8_t SL[80]={11,14,15,12,5,8,7,9,11,13,14,15,6,7,9,8,7,6,8,13,11,9,7,15,7,12,15,9,11,7,13,12,11,13,6,7,14,9,13,15,14,8,13,6,5,12,7,5,11,12,14,15,14,15,9,8,9,14,5,6,8,6,5,12,9,15,5,11,6,8,13,12,5,12,13,14,11,8,5,6};
+static const uint8_t SR[80]={8,9,9,11,13,15,15,5,7,7,8,11,14,14,12,6,9,13,15,7,12,8,9,11,7,7,12,7,6,15,13,11,9,7,15,11,8,6,6,14,12,13,5,14,13,13,7,5,15,5,8,11,14,14,6,14,6,9,12,9,12,5,15,8,8,5,12,9,12,5,14,6,8,13,6,5,15,13,11,11};
+static uint32_t fl(int r,uint32_t x,uint32_t y,uint32_t z){if(r==0)return x^y^z;if(r==1)return (x&y)|(~x&z);if(r==2)return (x|~y)^z;if(r==3)return (x&z)|(y&~z);return x^(y|~z);}
+static uint32_t fr(int r,uint32_t x,uint32_t y,uint32_t z){if(r==0)return x^(y|~z);if(r==1)return (x&z)|(y&~z);if(r==2)return (x|~y)^z;if(r==3)return (x&y)|(~x&z);return x^y^z;}
+static void ripemd32(const uint8_t in[32],uint8_t out[20]){
+ uint32_t w[16];for(int i=0;i<8;i++)w[i]=(uint32_t)in[i*4]|((uint32_t)in[i*4+1]<<8)|((uint32_t)in[i*4+2]<<16)|((uint32_t)in[i*4+3]<<24);w[8]=0x80;for(int i=9;i<14;i++)w[i]=0;w[14]=256;w[15]=0;
+ uint32_t al=0x67452301,bl=0xefcdab89,cl=0x98badcfe,dl=0x10325476,el=0xc3d2e1f0,ar=al,br=bl,cr=cl,dr=dl,er=el;
+ for(int j=0;j<80;j++){int r=j>>4;uint32_t kl=r==0?0:r==1?0x5a827999:r==2?0x6ed9eba1:r==3?0x8f1bbcdc:0xa953fd4e;uint32_t kr=r==0?0x50a28be6:r==1?0x5c4dd124:r==2?0x6d703ef3:r==3?0x7a6d76e9:0;uint32_t t=rol32(al+fl(r,bl,cl,dl)+w[RL[j]]+kl,SL[j])+el;al=el;el=dl;dl=rol32(cl,10);cl=bl;bl=t;t=rol32(ar+fr(r,br,cr,dr)+w[RR[j]]+kr,SR[j])+er;ar=er;er=dr;dr=rol32(cr,10);cr=br;br=t;}
+ uint32_t h[5]={0xefcdab89U + cl + dr,0x98badcfeU + dl + er,0x10325476U + el + ar,0xc3d2e1f0U + al + br,0x67452301U + bl + cr};for(int i=0;i<5;i++){out[i*4]=h[i];out[i*4+1]=h[i]>>8;out[i*4+2]=h[i]>>16;out[i*4+3]=h[i]>>24;}
+}
+
+
+static int equal20(const uint8_t a[20],const uint8_t b[20]){uint8_t d=0;for(int i=0;i<20;i++)d|=a[i]^b[i];return d==0;}
+void init_sniper(const uint8_t *start){current=jmul(start);}
+int scan_batch(const uint8_t *target,int count,uint32_t *found){
+ if(count<1)return -1;if(count>MAX_BATCH)count=MAX_BATCH;
+ jac next=current;for(int i=0;i<count;i++){points[i]=next;next=jaddg(next);}
+ fe acc={{1,0,0,0}};
+ for(int i=0;i<count;i++){prefix[i]=acc;acc=fmul(acc,points[i].z);}
+ acc=fpow(acc);
+ for(int i=count-1;i>=0;i--){zinv[i]=fmul(acc,prefix[i]);acc=fmul(acc,points[i].z);}
+ uint8_t pub[33],sh[32],rh[20];
+ for(int i=0;i<count;i++){fe iz2=fsqr(zinv[i]),ax=fmul(points[i].x,iz2),ay=fmul(points[i].y,fmul(zinv[i],iz2));pub[0]=(ay.v[0]&1)?3:2;be32(pub+1,ax);sha33(pub,sh);ripemd32(sh,rh);if(equal20(rh,target)){*found=(uint32_t)i;return 0;}}
+ current=next;
+ return -1;
+}
+
+void hash33_test(const uint8_t *in,uint8_t *out){uint8_t sh[32];sha33(in,sh);ripemd32(sh,out);}
+void pubkey_test(const uint8_t *scalar,uint8_t *out){jac p=jmul(scalar);fe iz=fpow(p.z),iz2=fsqr(iz),x=fmul(p.x,iz2),y=fmul(p.y,fmul(iz,iz2));out[0]=(y.v[0]&1)?3:2;be32(out+1,x);}
