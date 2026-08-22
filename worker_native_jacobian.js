@@ -7,11 +7,13 @@ const START_PTR = 2000000;
 const TARGET_PTR = 2000032;
 const FOUND_PTR = 2000064;
 const BATCH_SIZE = 10000;
+const BATCH_SIZE_N = 10000n;
+const PROGRESS_EVERY = 100000;
 
 async function wasmApi() {
   if (!wasmPromise) {
     wasmPromise = (async () => {
-      const response = await fetch('native_jacobian.wasm?build=20260822-reduce1-v2');
+      const response = await fetch('native_jacobian.wasm?build=20260822-maxexact-combined-fold-simd');
       if (!response.ok) throw new Error('WASM HTTP ' + response.status);
       const { instance } = await WebAssembly.instantiate(await response.arrayBuffer(), {});
       const e = instance.exports;
@@ -69,38 +71,35 @@ self.onmessage = async ({ data }) => {
   try {
     const E = await wasmApi();
     const heap = new Uint8Array(E.memory.buffer);
+    const view = new DataView(E.memory.buffer);
     let key = BigInt('0x' + data.startHex);
     const end = BigInt('0x' + data.endHex);
-
+    let reported = 0;
     writeU256BE(heap, START_PTR, key);
     heap.set(base58DecodeP2PKH(data.address), TARGET_PTR);
-    new DataView(E.memory.buffer).setUint32(FOUND_PTR, 0, true);
+    view.setUint32(FOUND_PTR, 0, true);
     E.init_sniper(START_PTR);
     self.postMessage({ type: 'ready', token });
-
     while (key <= end) {
       const remaining = end - key + 1n;
-      const count = Number(remaining > BigInt(BATCH_SIZE) ? BigInt(BATCH_SIZE) : remaining);
+      const count = Number(remaining > BATCH_SIZE_N ? BATCH_SIZE_N : remaining);
       const result = E.scan_batch(TARGET_PTR, count, FOUND_PTR);
       if (result === 0) {
-        const offset = new DataView(E.memory.buffer).getUint32(FOUND_PTR, true);
+        const offset = view.getUint32(FOUND_PTR, true);
         if (offset < count) {
-          self.postMessage({
-            type: 'found',
-            token,
-            key: hex256(key + BigInt(offset)),
-            count: offset + 1
-          });
+          self.postMessage({ type:'found', token, key:hex256(key + BigInt(offset)), count:reported + offset + 1 });
           return;
         }
         throw new Error('Native WASM gaf een ongeldige matchoffset terug');
       }
-      if (result !== -1) throw new Error('Onverwachte native WASM-resultaatcode: ' + result);
+      if (result !== -1) throw new Error('Onverwachte native resultaatcode: ' + result);
       key += BigInt(count);
-      self.postMessage({ type: 'progress', token, count });
+      reported += count;
+      if (reported >= PROGRESS_EVERY) { self.postMessage({ type:'progress', token, count:reported }); reported = 0; }
     }
-    self.postMessage({ type: 'done', token });
+    if (reported) self.postMessage({ type:'progress', token, count:reported });
+    self.postMessage({ type:'done', token });
   } catch (e) {
-    self.postMessage({ type: 'error', token, error: String(e && e.message || e) });
+    self.postMessage({ type:'error', token, error:String(e && e.message || e) });
   }
 };
