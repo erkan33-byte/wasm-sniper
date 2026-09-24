@@ -12,8 +12,8 @@
 <p class="sub">Native C naar WASM: Jacobian mixed addition, normalisatie van maximaal 10.000 punten met één batch-inversie en vaste-lengte SHA-256/RIPEMD-160. Iedere worker reserveert een eigen lease; workers starten willekeurig en hoppen onafhankelijk zonder actieve overlap.</p>
 <section class="card"><div class="grid">
 <label for="address">Target BTC-adres</label><input id="address" value="1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU">
-<label for="rangeMin">Minimum (hex, inclusief)</label><input id="rangeMin" value="400000000000000000">
-<label for="rangeMax">Maximum (hex, inclusief)</label><input id="rangeMax" value="7fffffffffffffffff">
+<label for="rangeMin">Minimum (hex, inclusief)</label><input id="rangeMin" value="40A3D70A3D70A3D701">
+<label for="rangeMax">Maximum (hex, inclusief)</label><input id="rangeMax" value="5CCCCCCCCCCCCFFFFF">
 <label for="sliceSize">Keys per workerlease</label><input id="sliceSize" type="number" min="1000" step="1000000" value="10000000">
 <label for="mode">Slice-methode</label><select id="mode"><option value="random" selected>Willekeurige zelfstandige leases</option><option value="sequential">Sequentiële zelfstandige leases</option></select>
 <label for="threads">CPU-workers</label><input id="threads" type="number" min="1" max="16" value="4">
