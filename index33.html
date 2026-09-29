@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Puzzle 71 — gemiddelde zoektijd</title>
+<style>
+:root{color-scheme:dark;--bg:#071018;--card:#101b27;--green:#50e3a4;--blue:#47b8f5;--muted:#9db0c2;--red:#ff7777}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#e5eef7;font:15px system-ui,sans-serif}.app{max-width:850px;margin:auto;padding:28px 16px}.card{background:var(--card);border:1px solid #253749;border-radius:10px;padding:18px;margin:14px 0}h1{color:var(--green);font-size:1.4rem}h2{font-size:1.05rem;color:var(--blue)}.sub,.note{color:var(--muted);line-height:1.5}.grid{display:grid;grid-template-columns:250px 1fr;gap:10px;align-items:center}.grid label{color:#c4d1dc}input{width:100%;background:#071018;border:1px solid #385067;border-radius:6px;padding:10px;color:var(--green);font:14px ui-monospace,monospace}button{margin-top:16px;padding:11px 17px;border:0;border-radius:6px;font-weight:700;cursor:pointer;background:var(--green);color:#04130c}.results{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.stat{background:#071018;border-radius:6px;padding:12px}.label{font-size:.73rem;color:var(--muted);text-transform:uppercase}.value{font:700 1rem ui-monospace,monospace;color:var(--green);margin-top:5px;word-break:break-all}.error{color:var(--red)}code{color:var(--green)}@media(max-width:650px){.grid,.results{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main class="app">
+<h1>Puzzle 71 — automatische gemiddelde zoektijd</h1>
+<p class="sub">Vul je startkey en totale snelheid in. De calculator berekent hoe lang een uniforme, onbekende target gemiddeld nodig heeft in een sequentiële scan. Dit voorspelt niet de echte private key.</p>
+<section class="card"><h2>Jouw scan</h2><div class="grid">
+<label for="start">Startkey (hex)</label><input id="start" value="4e478008a32bdbe7bd">
+<label for="speed">Totale snelheid (keys/s)</label><input id="speed" value="1700000" inputmode="decimal">
+</div><button id="calculate">Bereken gemiddelde zoektijd</button><p id="error" class="error"></p></section>
+<section class="card"><h2>Vaste Puzzle 71-range</h2><div class="results">
+<div class="stat"><div class="label">Minimum</div><div class="value">0x400000000000000000</div></div>
+<div class="stat"><div class="label">Maximum</div><div class="value">0x7fffffffffffffffff</div></div>
+<div class="stat"><div class="label">Aantal kandidaten</div><div id="total" class="value">—</div></div>
+<div class="stat"><div class="label">Startpositie</div><div id="startPct" class="value">—</div></div>
+</div></section>
+<section class="card"><h2>Automatische tijdsberekening</h2><div class="results">
+<div class="stat"><div class="label">Gemiddeld aantal keys tot target</div><div id="averageKeys" class="value">—</div></div>
+<div class="stat"><div class="label">Gemiddelde zoektijd</div><div id="averageTime" class="value">—</div></div>
+<div class="stat"><div class="label">Volledige scan</div><div id="fullTime" class="value">—</div></div>
+<div class="stat"><div class="label">Tijd tot 50%-kans</div><div id="halfChance" class="value">—</div></div>
+</div></section>
+<section class="card"><h2>Gemiddelde targetpositie vanaf jouw start</h2><div class="results">
+<div class="stat"><div class="label">Gemiddelde keypositie</div><div id="averageKey" class="value">—</div></div>
+<div class="stat"><div class="label">Positie in range</div><div id="averagePct" class="value">—</div></div>
+<div class="stat"><div class="label">Volledige rondes gemiddeld</div><div id="rounds" class="value">—</div></div>
+<div class="stat"><div class="label">Jaar per volledige ronde</div><div id="years" class="value">—</div></div>
+</div><p id="explanation" class="note"></p></section>
+<section class="card note"><strong>Interpretatie:</strong> bij een onbekende target die uniform over de range verdeeld is, ligt de gemiddelde positie op ongeveer de helft van één volledige ronde. De slicegrootte verandert deze kans niet; alleen het aantal unieke keys per seconde telt. Puzzle 71 heeft geen bekende public key, dus dit is geen BSGS-berekening.</section>
+</main>
+<script>
+'use strict';
+const MIN=0x400000000000000000n,MAX=0x7fffffffffffffffffn,TOTAL=MAX-MIN+1n,DAY=86400n,YEAR=365n*DAY;
+const $=id=>document.getElementById(id);
+function parseHex(s){s=s.trim().replace(/^0x/i,'');if(!s||!/^[0-9a-f]+$/i.test(s))throw Error('Ongeldige hexwaarde.');return BigInt('0x'+s)}
+function parseDecimal(s,label){s=s.trim().replace(',','.');if(!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(s))throw Error(label+' moet een positief getal zijn.');const p=s.split('.'),f=p[1]||'',den=10n**BigInt(f.length),num=BigInt((p[0]||'0')+f);return[num,den]}
+function fmtInt(x){return x.toLocaleString('nl-NL')}
+function fmtHex(x){return '0x'+x.toString(16)}
+function fmtPct(num,den){return (Number(num)/Number(den)*100).toLocaleString('nl-NL',{maximumFractionDigits:15})+'%'}
+function fmtRationalSeconds(num,den){let whole=num/den,rem=num%den;const days=whole/DAY;whole%=DAY;const hours=whole/3600n;whole%=3600n;const mins=whole/60n;const secs=whole%60n;let frac='';if(rem){frac=(rem*1000000n/den).toString().padStart(6,'0').replace(/0+$/,'');}return `${fmtInt(days)} dagen, ${hours.toString()} uur, ${mins.toString()} min, ${secs.toString()}${frac?'.'+frac:''} s`}
+function yearsDecimal(num,den){return (Number(num)/Number(den)).toLocaleString('nl-NL',{maximumFractionDigits:6})}
+function calculate(){try{
+ $('error').textContent='';const start=parseHex($('start').value);const[speedN,speedD]=parseDecimal($('speed').value,'Snelheid');
+ if(start<MIN||start>MAX)throw Error('De startkey moet binnen de Puzzle 71-range liggen.');if(speedN<=0n)throw Error('Snelheid moet groter dan nul zijn.');
+ const startOffset=start-MIN,avg=(TOTAL+1n)/2n,avgOffset=avg-1n;const avgKey=MIN+(startOffset+avgOffset)%TOTAL;
+ $('total').textContent=fmtInt(TOTAL);$('startPct').textContent=fmtPct(startOffset,TOTAL);$('averageKeys').textContent=fmtInt(avg);
+ $('averageTime').textContent=fmtRationalSeconds(avg*speedD,speedN);$('halfChance').textContent=fmtRationalSeconds(avg*speedD,speedN);$('fullTime').textContent=fmtRationalSeconds(TOTAL*speedD,speedN);
+ $('averageKey').textContent=fmtHex(avgKey);$('averagePct').textContent=fmtPct(avgKey-MIN,TOTAL);$('rounds').textContent='0';$('years').textContent=yearsDecimal(TOTAL*speedD,speedN*YEAR);
+ $('explanation').textContent=`Bij ${$('speed').value} keys/s is de gemiddelde targetpositie ${fmtInt(avg)} keys na jouw startkey. De scan komt dan uit op ${fmtHex(avgKey)}. Dit is een statistisch gemiddelde; de echte target kan eerder of later liggen.`;
+ }catch(e){$('error').textContent=e.message}}
+$('calculate').addEventListener('click',calculate);calculate();
+</script></body></html>
