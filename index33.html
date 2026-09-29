@@ -11,12 +11,14 @@
 <h1>Puzzle 71 — automatische gemiddelde zoektijd</h1>
 <p class="sub">Vul je startkey en totale snelheid in. De calculator berekent hoe lang een uniforme, onbekende target gemiddeld nodig heeft in een sequentiële scan. Dit voorspelt niet de echte private key.</p>
 <section class="card"><h2>Jouw scan</h2><div class="grid">
+<label for="min">Minimum (hex)</label><input id="min" value="400000000000000000">
+<label for="max">Maximum (hex)</label><input id="max" value="7fffffffffffffffff">
 <label for="start">Startkey (hex)</label><input id="start" value="4e478008a32bdbe7bd">
 <label for="speed">Totale snelheid (keys/s)</label><input id="speed" value="1700000" inputmode="decimal">
 </div><button id="calculate">Bereken gemiddelde zoektijd</button><p id="error" class="error"></p></section>
 <section class="card"><h2>Vaste Puzzle 71-range</h2><div class="results">
-<div class="stat"><div class="label">Minimum</div><div class="value">0x400000000000000000</div></div>
-<div class="stat"><div class="label">Maximum</div><div class="value">0x7fffffffffffffffff</div></div>
+<div class="stat"><div class="label">Minimum</div><div id="rangeMin" class="value">—</div></div>
+<div class="stat"><div class="label">Maximum</div><div id="rangeMax" class="value">—</div></div>
 <div class="stat"><div class="label">Aantal kandidaten</div><div id="total" class="value">—</div></div>
 <div class="stat"><div class="label">Startpositie</div><div id="startPct" class="value">—</div></div>
 </div></section>
@@ -36,7 +38,7 @@
 </main>
 <script>
 'use strict';
-const MIN=0x400000000000000000n,MAX=0x7fffffffffffffffffn,TOTAL=MAX-MIN+1n,DAY=86400n,YEAR=365n*DAY;
+const DAY=86400n,YEAR=365n*DAY;
 const $=id=>document.getElementById(id);
 function parseHex(s){s=s.trim().replace(/^0x/i,'');if(!s||!/^[0-9a-f]+$/i.test(s))throw Error('Ongeldige hexwaarde.');return BigInt('0x'+s)}
 function parseDecimal(s,label){s=s.trim().replace(',','.');if(!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(s))throw Error(label+' moet een positief getal zijn.');const p=s.split('.'),f=p[1]||'',den=10n**BigInt(f.length),num=BigInt((p[0]||'0')+f);return[num,den]}
@@ -46,12 +48,13 @@ function fmtPct(num,den){return (Number(num)/Number(den)*100).toLocaleString('nl
 function fmtRationalSeconds(num,den){let whole=num/den,rem=num%den;const days=whole/DAY;whole%=DAY;const hours=whole/3600n;whole%=3600n;const mins=whole/60n;const secs=whole%60n;let frac='';if(rem){frac=(rem*1000000n/den).toString().padStart(6,'0').replace(/0+$/,'');}return `${fmtInt(days)} dagen, ${hours.toString()} uur, ${mins.toString()} min, ${secs.toString()}${frac?'.'+frac:''} s`}
 function yearsDecimal(num,den){return (Number(num)/Number(den)).toLocaleString('nl-NL',{maximumFractionDigits:6})}
 function calculate(){try{
- $('error').textContent='';const start=parseHex($('start').value);const[speedN,speedD]=parseDecimal($('speed').value,'Snelheid');
- if(start<MIN||start>MAX)throw Error('De startkey moet binnen de Puzzle 71-range liggen.');if(speedN<=0n)throw Error('Snelheid moet groter dan nul zijn.');
- const startOffset=start-MIN,avg=(TOTAL+1n)/2n,avgOffset=avg-1n;const avgKey=MIN+(startOffset+avgOffset)%TOTAL;
- $('total').textContent=fmtInt(TOTAL);$('startPct').textContent=fmtPct(startOffset,TOTAL);$('averageKeys').textContent=fmtInt(avg);
- $('averageTime').textContent=fmtRationalSeconds(avg*speedD,speedN);$('halfChance').textContent=fmtRationalSeconds(avg*speedD,speedN);$('fullTime').textContent=fmtRationalSeconds(TOTAL*speedD,speedN);
- $('averageKey').textContent=fmtHex(avgKey);$('averagePct').textContent=fmtPct(avgKey-MIN,TOTAL);$('rounds').textContent='0';$('years').textContent=yearsDecimal(TOTAL*speedD,speedN*YEAR);
+ $('error').textContent='';const min=parseHex($('min').value),max=parseHex($('max').value),start=parseHex($('start').value);const[speedN,speedD]=parseDecimal($('speed').value,'Snelheid');
+ if(min>max)throw Error('Minimum ligt na maximum.');if(start<min||start>max)throw Error('De startkey moet binnen de ingestelde range liggen.');if(speedN<=0n)throw Error('Snelheid moet groter dan nul zijn.');
+ const total=max-min+1n;
+ const startOffset=start-min,avg=(total+1n)/2n,avgOffset=avg-1n;const avgKey=min+(startOffset+avgOffset)%total;
+ $('rangeMin').textContent=fmtHex(min);$('rangeMax').textContent=fmtHex(max);$('total').textContent=fmtInt(total);$('startPct').textContent=fmtPct(startOffset,total);$('averageKeys').textContent=fmtInt(avg);
+ $('averageTime').textContent=fmtRationalSeconds(avg*speedD,speedN);$('halfChance').textContent=fmtRationalSeconds(avg*speedD,speedN);$('fullTime').textContent=fmtRationalSeconds(total*speedD,speedN);
+ $('averageKey').textContent=fmtHex(avgKey);$('averagePct').textContent=fmtPct(avgKey-min,total);$('rounds').textContent='0';$('years').textContent=yearsDecimal(total*speedD,speedN*YEAR);
  $('explanation').textContent=`Bij ${$('speed').value} keys/s is de gemiddelde targetpositie ${fmtInt(avg)} keys na jouw startkey. De scan komt dan uit op ${fmtHex(avgKey)}. Dit is een statistisch gemiddelde; de echte target kan eerder of later liggen.`;
  }catch(e){$('error').textContent=e.message}}
 $('calculate').addEventListener('click',calculate);calculate();
