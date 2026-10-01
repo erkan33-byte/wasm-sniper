@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WASM SIMD P2PKH Scanner</title>
+<style>
+:root{--bg:#071018;--card:#101b27;--g:#50e3a4;--b:#47b8f5;--r:#e05252;--m:#9db0c2}*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:#e5eef7;font:15px system-ui,sans-serif}.app{max-width:900px;margin:auto;padding:24px 16px}
+h1{margin:0;color:var(--g);font-size:1.3rem}.sub{color:var(--m);margin:8px 0 18px;line-height:1.45}
+.card{background:var(--card);border:1px solid #253749;border-radius:10px;padding:16px;margin:12px 0}
+.grid{display:grid;grid-template-columns:230px 1fr;gap:10px;align-items:center}.grid label{color:#b9c6d3;font-size:.9rem}
+input,select{width:100%;background:#071018;border:1px solid #385067;border-radius:6px;padding:9px;color:var(--g);font:14px ui-monospace,monospace}
+input[readonly]{color:#a9bbcb}.row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+button{padding:10px 15px;border:0;border-radius:6px;font-weight:700;cursor:pointer;background:var(--g);color:#04130c}
+button.s{background:var(--r);color:#fff}button.t{background:#294056;color:#e5eef7}button:disabled{opacity:.5;cursor:not-allowed}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.st{background:#071018;border-radius:6px;padding:10px}
+.l{font-size:.7rem;color:var(--m);text-transform:uppercase}.v{font:700 .95rem ui-monospace,monospace;color:var(--g);margin-top:4px;word-break:break-all}
+.bar{height:8px;background:#071018;border-radius:6px;overflow:hidden;margin-top:12px}.fill{height:100%;width:0;background:linear-gradient(90deg,var(--b),var(--g))}
+.note{font-size:.88rem;color:#c4d1dc;line-height:1.5}#log{white-space:pre-wrap;background:#020609;border-radius:6px;padding:10px;min-height:110px;max-height:240px;overflow:auto;color:#b9d8c9;font:12px ui-monospace,monospace}
+@media(max-width:700px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
+</style></head>
+<body><main class="app">
+<h1>WASM SIMD P2PKH Scanner</h1>
+<p class="sub">Affiene groepsoptelling met gedeelde batch-inversie en 4-weg SIMD SHA-256/RIPEMD-160. Alles in één bestand: de WASM zit ingebed. Elke worker reserveert een eigen lease zonder overlap met actieve leases.</p>
+<section class="card"><div class="grid">
+<label for="address">Target BTC-adres (P2PKH)</label><input id="address" value="1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU">
+<label for="rangeMin">Minimum (hex)</label><input id="rangeMin" value="40A3D70A3D70A3D701">
+<label for="rangeMax">Maximum (hex)</label><input id="rangeMax" value="5CCCCCCCCCCCCFFFFF">
+<label for="sliceSize">Keys per workerlease</label><input id="sliceSize" type="number" min="1025" step="1025" value="20000000">
+<label for="mode">Slice-methode</label><select id="mode"><option value="random" selected>Willekeurig</option><option value="sequential">Sequentieel</option></select>
+<label for="threads">CPU-workers</label><input id="threads" type="number" min="1" max="64" value="4">
+<label>Actieve leases</label><input id="sliceRange" readonly value="Nog niet gereserveerd">
+</div><div class="row"><button id="start">Start</button><button id="stop" class="s" disabled>Stop</button><button id="test" class="t">Zelftest (sleutel 1)</button></div></section>
+<section class="card"><div class="stats">
+<div class="st"><div class="l">Status</div><div id="status" class="v">Gereed</div></div>
+<div class="st"><div class="l">Gescande keys</div><div id="total" class="v">0</div></div>
+<div class="st"><div class="l">Snelheid</div><div id="speed" class="v">0 /s</div></div>
+<div class="st"><div class="l">Leases bezocht</div><div id="sliceCount" class="v">0</div></div></div>
+<div class="bar"><div id="fill" class="fill"></div></div><p id="coverage" class="note">0 / 0 keys.</p></section>
+<section class="card"><div id="log">Wacht op start.</div></section>
+</main>
+<script id="wsrc" type="text/plain">
+let instP=null,cachedA='',cachedT=null;
+const S=2000000,T=2000032,F=2000064,PE=400000;
+function b58(a){const A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz',d=[0];
+ for(const ch of a){let c=A.indexOf(ch);if(c<0)throw Error('Ongeldig Base58-teken');for(let i=0;i<d.length;i++){c+=d[i]*58;d[i]=c&255;c>>>=8}while(c){d.push(c&255);c>>>=8}}
+ for(let i=0;i<a.length&&a[i]==='1';i++)d.push(0);d.reverse();
+ if(d.length!==25||d[0]!==0)throw Error('Alleen P2PKH (versie 00) toegestaan');return new Uint8Array(d.slice(1,21))}
+const wr=(h,p,v)=>{for(let i=31;i>=0;i--){h[p+i]=Number(v&255n);v>>=8n}};
+onmessage=async({data})=>{
+ if(data.type==='init'){instP=WebAssembly.instantiate(data.module,{}).then(i=>i.exports);return}
+ if(data.type!=='scan')return;const token=data.token;
+ try{const E=await instP,heap=new Uint8Array(E.memory.buffer),view=new DataView(E.memory.buffer),B=BigInt(E.batch_keys());
+  if(data.address!==cachedA){cachedT=b58(data.address);cachedA=data.address}
+  let key=BigInt('0x'+data.startHex);const end=BigInt('0x'+data.endHex);let rep=0;
+  wr(heap,S,key);heap.set(cachedT,T);view.setUint32(F,0,true);E.init_sniper(S);postMessage({type:'ready',token});
+  while(key<=end){const rem=end-key+1n,count=Number(rem>B?B:rem);
+   if(E.scan_batch(T,count,F)===0){const off=view.getUint32(F,true);
+    if(off<count){postMessage({type:'found',token,key:(key+BigInt(off)).toString(16).padStart(64,'0'),count:rep+off+1});return}
+    throw Error('Ongeldige matchoffset')}
+   key+=BigInt(count);rep+=count;if(rep>=PE){postMessage({type:'progress',token,count:rep});rep=0}}
+  if(rep)postMessage({type:'progress',token,count:rep});postMessage({type:'done',token})
+ }catch(e){postMessage({type:'error',token,error:String(e&&e.message||e)})}};
+</script>
+<script>
+const WASM_B64="__WASM_B64__";
+const $=id=>document.getElementById(id);
+let W=[],running=false,sess=0,total=0n,leases=0,t0=0,cursor=0n,timer=0,MOD=null,URLW=null;const act=new Map();
+const log=t=>{$('log').textContent=(new Date().toLocaleTimeString('nl-NL')+'  '+t+'\n'+$('log').textContent).split('\n').slice(0,150).join('\n')};
+const hx=s=>'0x'+s.toString(16);
+const parse=s=>{s=s.trim().replace(/^0x/i,'');if(!/^[0-9a-f]+$/i.test(s))throw Error('Ongeldige hexwaarde');return BigInt('0x'+s)};
+function rbelow(b){if(b<=1n)return 0n;const full=1n<<256n,cut=full-(full%b),by=new Uint8Array(32);for(;;){crypto.getRandomValues(by);let n=0n;for(const x of by)n=(n<<8n)|BigInt(x);if(n<cut)return n%b}}
+const free=c=>{for(const l of act.values())if(c.start<=l.end&&l.start<=c.end)return false;return true};
+function reserve(c,id){const span=c.max-c.min+1n,nom=c.size<span?c.size:span;
+ if(c.mode==='sequential'){for(let k=0;k<act.size+2;k++){if(cursor<c.min||cursor>c.max)cursor=c.min;
+  const len=nom>(c.max-cursor+1n)?(c.max-cursor+1n):nom,l={id,start:cursor,end:cursor+len-1n,length:len,scanned:0n};
+  cursor=l.end===c.max?c.min:l.end+1n;if(free(l)){act.set(id,l);return l}}}
+ else{const room=span-nom+1n;for(let k=0;k<256;k++){const s=c.min+rbelow(room),l={id,start:s,end:s+nom-1n,length:nom,scanned:0n};if(free(l)){act.set(id,l);return l}}}
+ throw Error('Geen niet-overlappende lease beschikbaar')}
+const showL=()=>{const a=[...act.values()].sort((x,y)=>x.id-y.id);$('sliceRange').value=a.length?a.map(x=>`W${x.id+1}: ${hx(x.start)}:${hx(x.end)}`).join(' | '):'Geen actieve leases'};
+function metrics(){const s=(performance.now()-t0)/1000;$('total').textContent=total.toLocaleString('nl-NL');
+ $('speed').textContent=s>0?Math.round(Number(total)/s).toLocaleString('nl-NL')+' /s':'0 /s';$('sliceCount').textContent=leases.toLocaleString('nl-NL');
+ const a=[...act.values()],d=a.reduce((x,l)=>x+l.scanned,0n),cap=a.reduce((x,l)=>x+l.length,0n),p=cap?Number(d*10000n/cap)/100:0;
+ $('fill').style.width=Math.min(100,p)+'%';$('coverage').textContent=a.length?`${d.toLocaleString('nl-NL')} / ${cap.toLocaleString('nl-NL')} keys in ${a.length} lease(s) (${Math.min(100,p).toFixed(2)}%).`:'Geen actieve lease.'}
+const tick=()=>{if(!running)return;metrics();timer=setTimeout(tick,250)};
+function stop(why){metrics();running=false;clearTimeout(timer);sess++;for(const w of W)w&&w.terminate();W=[];act.clear();showL();
+ $('start').disabled=false;$('test').disabled=false;$('stop').disabled=true;$('status').textContent=why;log(why)}
+function assign(c,id,tok){if(!running||tok!==sess)return;let l;try{l=reserve(c,id)}catch(e){stop('Leasefout');log(e.message);return}
+ leases++;showL();log(`Worker ${id+1}: lease ${hx(l.start)} : ${hx(l.end)} (${l.length} keys)`);
+ W[id].postMessage({type:'scan',token:tok,startHex:l.start.toString(16),endHex:l.end.toString(16),address:c.address})}
+function spawn(c,id,tok){const w=new Worker(URLW);W[id]=w;w.postMessage({type:'init',module:MOD});
+ w.onmessage=({data:d})=>{if(!running||d.token!==tok)return;const l=act.get(id);
+  if(d.type==='ready'){if(id===0)$('status').textContent='Scant (SIMD)'}
+  else if(d.type==='progress'){const n=BigInt(d.count);total+=n;if(l)l.scanned+=n}
+  else if(d.type==='found'){const n=BigInt(d.count);total+=n;if(l)l.scanned+=n;metrics();log('MATCH door worker '+(id+1)+': 0x'+d.key);stop('MATCH: 0x'+d.key)}
+  else if(d.type==='done'){act.delete(id);showL();assign(c,id,tok)}
+  else if(d.type==='error'){log(`Worker ${id+1} fout: ${d.error}`);stop('Fout')}};
+ w.onerror=e=>{if(running){log(`Worker ${id+1} fout: ${e.message}`);stop('Fout')}};assign(c,id,tok)}
+async function start(){try{
+ const min=parse($('rangeMin').value),max=parse($('rangeMax').value);if(min>max)throw Error('Minimum ligt na maximum');
+ const raw=$('sliceSize').value.trim();if(!/^\d+$/.test(raw)||BigInt(raw)<1025n)throw Error('Lease moet minstens 1025 keys zijn');
+ const c={address:$('address').value.trim(),min,max,size:BigInt(raw),threads:Math.max(1,Math.min(64,Number($('threads').value)||1)),mode:$('mode').value};
+ $('start').disabled=true;$('test').disabled=true;$('status').textContent='WASM laden';
+ if(!MOD){MOD=await WebAssembly.compile(Uint8Array.from(atob(WASM_B64),x=>x.charCodeAt(0)))}
+ if(!URLW)URLW=URL.createObjectURL(new Blob([$('wsrc').textContent],{type:'text/javascript'}));
+ running=true;sess++;const tok=sess;total=0n;leases=0;act.clear();cursor=min;t0=performance.now();$('stop').disabled=false;$('fill').style.width='0';
+ log(`Start: ${c.threads} workers, lease=${c.size} keys, modus=${c.mode}`);tick();for(let i=0;i<c.threads;i++)spawn(c,i,tok)
+}catch(e){$('start').disabled=false;$('test').disabled=false;$('status').textContent='Fout';log('Fout: '+e.message)}}
+$('start').onclick=start;$('stop').onclick=()=>stop('Gestopt door gebruiker.');
+$('test').onclick=()=>{$('address').value='1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH';$('rangeMin').value='1';$('rangeMax').value='5000';$('sliceSize').value='5000';$('threads').value='1';$('mode').value='sequential';log('Zelftest: verwacht MATCH 0x...01');start()};
+</script></body></html>
